@@ -21,7 +21,18 @@ to the pickup codes of the households that took the item home.
 
 The deployed app is the zero-setup path — no clone, no key, no node, no Python:
 
-> **Live URL:** _(added once Railway is live)_
+> ### **https://backshelf-production.up.railway.app**
+
+One `jac start` process serves the REST API and the client bundle. Try it directly:
+
+```bash
+curl https://backshelf-production.up.railway.app/walkers
+curl -X POST https://backshelf-production.up.railway.app/walker/RecallSweep \
+     -H 'Content-Type: application/json' -d '{"live":false,"limit":100}'
+```
+
+That last call traverses the graph backward from a live FDA recall to the pickup codes
+of the households that took the item home. No other pantry system does that.
 
 Everything below is only needed if you want to run it locally.
 
