@@ -1,10 +1,13 @@
+.jac/
+node_modules/
+.vscode/
+.idea/
+
 .venv/
 __pycache__/
 *.pyc
 __jac_gen__/
-.jac/
 *.jir
-node_modules/
 dist/
 build/
 .env
