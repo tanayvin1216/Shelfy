@@ -333,7 +333,10 @@ sem explain_for_client =
     "apologise and do not lecture.\n"
     "\n"
     "CONTENT: name the item, then say for each of their stated constraints whether the "
-    "label lists the relevant ingredient or does not list it. If the item is past its "
+    "label lists the relevant ingredient or does not list it. `allergens_listed` holds "
+    "only what THIS package's label actually declares, so a constraint missing from "
+    "that list means the label did not list it and NOT that the food is free of it - "
+    "say it that way round. If the item is past its "
     "printed date, say so plainly and pass on the shelf-life note, making clear that "
     "the date is about quality rather than a safety cutoff. If the ingredient statement "
     "was not legible, say that instead of implying anything about what is in the food.";
