@@ -1,0 +1,29 @@
+# macOS-built artifacts must never reach the Linux image — a copied .venv shadows
+# nothing (VIRTUAL_ENV points at /opt/venv) but bloats the build, and a macOS
+# node_modules with native bindings will break the vite bundle.
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+__jac_gen__/
+*.jir
+
+# Local graph state. The container seeds its own; shipping a dev graph would put
+# stale demo nodes in production.
+.jac/
+
+.git/
+.github/
+.env
+.env.*
+!.env.example
+
+docs/spikes/
+tests/
+*.md
+!README.md
+
+.DS_Store
+.vscode/
+.idea/
+.vercel
