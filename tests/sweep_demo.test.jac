@@ -112,7 +112,9 @@ test "the household notice cites the recall and carries no PII" {
     assert "H-1125-2026" in notice.message;
     assert "Undeclared peanuts." in notice.message;
     assert notice.preferred_language == "en";
-    assert notice.picked_up_at == "2026-07-18T10:20:00";
+    # Day precision, not second precision — an exact pickup time plus the item and
+    # code re-identifies a household to anyone who watched the pickup line (§4).
+    assert notice.picked_up_at == "2026-07-18";
 }
 
 test "a dead network falls back to the committed snapshot" {

@@ -287,7 +287,7 @@ def:pub app -> JsxElement {
                                         <span style={{"fontFamily": MONO, "fontSize": "1.4rem", "letterSpacing": "0.08em"}}>{h.pickup_code}</span>
                                         <Tag text={h.confidence} tone={"block" if h.confidence == "CONFIRMED" else "hold"}/>
                                         <Tag text={"lang " + h.preferred_language}/>
-                                        <Tag text={h.notify_contact if h.notify_contact != "" else "no contact on file"}/>
+                                        <Tag text={"reachable" if h.contact_on_file else "no contact on file"}/>
                                         <p style={{"margin": "0.25rem 0 0", "maxWidth": "70ch"}}>{h.message}</p>
                                     </div>
                                 }}

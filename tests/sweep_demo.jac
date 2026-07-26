@@ -126,7 +126,7 @@ with entry:__main__ {
     print("\n=== HOUSEHOLDS TO NOTIFY (backward traversal) ===");
     for row in out.notify_households {
         print(f"  pickup code {row.pickup_code}  [{row.confidence}] "
-              + f"lang={row.preferred_language} contact={row.notify_contact or '(none on file)'}");
+              + f"lang={row.preferred_language} contact={'reachable' if row.contact_on_file else '(none on file)'}");
         print(f"      took home {row.brand} {row.product} at {row.picked_up_at}");
         print(f"      {row.message}");
     }
