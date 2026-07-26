@@ -24,17 +24,28 @@ impl app.runSeed -> None {
     busy = False;
 }
 
+"""Scan one donation, and time it.
+
+The clock is on screen because section 11 asks for a verdict in under ten
+seconds and an unmeasured claim is not a demo. `Date.now()` comes off the
+untyped browser global for the same reason `FileReader` does.
+"""
 impl app.runScan -> None {
     busy = True;
+    scanSecs = "";
     status = "IntakeScan ...";
+    started: float = _browser.Date.now() as float;  # jac:ignore[E1053]
     res = (root spawn IntakeScan(
         photo_base64=(photo64 if photo64 != "" else BLANK_PNG),
         hint=hint
     )).reports[0];
+    ended: float = _browser.Date.now() as float;  # jac:ignore[E1053]
+    scanSecs = f"{(ended - started) / 1000.0:.1f}";
     intake = res;
     lastItemId = res.item.id;
     cleared = None;
-    status = "Scanned. Verdict: " + res.verdict + " on the " + res.holding_shelf + ".";
+    status = "Scanned in " + scanSecs + "s. Verdict: "
+        + res.verdict + " on the " + res.holding_shelf + ".";
     busy = False;
 }
 
@@ -90,6 +101,18 @@ impl app.runSweep -> None {
 
 impl app.toggleFeed(e: MouseEvent) -> None {
     useLiveFeed = not useLiveFeed;
+}
+
+"""Set the language the client explanation comes back in.
+
+Deliberately does NOT re-run the search itself. `has` fields are `useState`, so
+the write below is not visible to a spawn made in the same handler - it would
+send the previous language and silently show the wrong beat on stage. One more
+tap on 4 is the honest version.
+"""
+impl app.pickLanguage(choice: str) -> None {
+    language = choice;
+    status = "Language set to " + choice + ". Press 4 to ask again.";
 }
 
 """Read the chosen photo as base64 so IntakeScan gets the real label.
