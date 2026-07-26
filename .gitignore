@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+__jac_gen__/
+.jac/
+*.jir
+node_modules/
+dist/
+build/
+.env
+.env.*
+!.env.example
+*.session
+.DS_Store
+.vercel
