@@ -19,6 +19,10 @@ import from byllm.lib { Image, MockLLM, Model, MTRuntime }
 import from byllm.llm { BaseLLM }
 import from byllm.types { CompletionResult }
 
+# byllm 0.6.19 mis-annotates `Image.url` as a string literal instead of a union,
+# so a direct `Image(...)` can never pass `jac check`. Construct through here.
+glob _ImageCls: any = Image;
+
 # ---------------------------------------------------------------------------
 # Constrained vocabularies
 # ---------------------------------------------------------------------------
@@ -153,21 +157,20 @@ sem extract_label.hint =
 """Build the `photo` argument for `extract_label` from a base64 payload.
 
 IntakeScan receives the phone photo as base64 (spec §6). byllm 0.6.19 annotates
-`Image.url` with a string LITERAL of its own union type, so a direct
-`Image(some_str)` fails `jac check` (E1053); routing through an `any`-typed
-local is the workaround proven in docs/spikes/byllm/s05b_image_checkfix.jac.
+`Image.url` with a string LITERAL of its own union type rather than the union
+itself, so NO argument can satisfy `jac check` at a direct `Image(...)` call.
+Calling through the `any`-typed `_ImageCls` glob and casting back is the
+workaround proven in docs/spikes/byllm/s05c_image_factory.jac.
 Accepts a bare base64 string or a `data:image/...;base64,` data URL.
 """
 def image_from_base64(payload: str) -> Image {
     body = payload.split(",")[-1] if payload.startswith("data:") else payload;
-    raw: any = base64.b64decode(body);
-    return Image(raw);
+    return _ImageCls(base64.b64decode(body)) as Image;
 }
 
 """Build the `photo` argument for `extract_label` from a file path or URL."""
 def image_from_source(src: str) -> Image {
-    s: any = src;
-    return Image(s);
+    return _ImageCls(src) as Image;
 }
 
 # ---------------------------------------------------------------------------
