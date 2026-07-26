@@ -38,6 +38,20 @@ import from llm {
     image_from_base64, image_from_source, _using_mock_llm
 }
 
+# Recall matching is deliberately NOT duplicated here. Intake and the
+# retroactive sweep must agree to the letter about which recalls cover which
+# jar: if the desk reads a jar CONFIRMED and the sweep reads the same jar WEAK,
+# the sweep un-blocks it and silently stops naming the households that took it
+# home. That happened - intake and the sweep each kept their own brand and
+# product matchers and they drifted.
+#
+# So the whole grader lives in `sweep.sv.jac` and this file calls it. Intake
+# adds only the volunteer-facing wording around the tier it is handed; it never
+# decides the tier itself.
+import from sweep {
+    _classify, _product_matched, _evidence_id, _stamp, _lot_state
+}
+
 # ---------------------------------------------------------------------------
 # Thresholds and vocabularies
 # ---------------------------------------------------------------------------
@@ -143,20 +157,6 @@ glob NEGATION_MARKERS: list[str] = [
     "gluten free", "gluten-free"
 ];
 
-"""Corporate suffixes and packaging noise - never distinctive enough to match on."""
-glob MATCH_STOPWORDS: list[str] = [
-    "the", "and", "with", "for", "all", "new", "net", "wt", "inc", "llc", "ltd",
-    "co", "corp", "company", "brand", "brands", "foods", "food", "products",
-    "product", "size", "count", "pack", "packs", "case", "cases", "oz", "lb",
-    "lbs", "gram", "grams", "ounce", "ounces", "container", "containers"
-];
-
-"""Words that label a lot code rather than being part of one."""
-glob LOT_LABEL_WORDS: list[str] = [
-    "lot", "lots", "batch", "code", "codes", "no", "number", "bb", "best",
-    "by", "before", "exp", "expires", "use", "sell", "mfg", "est", "ubd"
-];
-
 """Physical damage wording that genuinely does justify a discard (sec 4)."""
 glob COMPROMISED_MARKERS: list[str] = [
     "bulg", "swell", "swollen", "rust", "punctur", "leak", "leaking",
@@ -164,6 +164,28 @@ glob COMPROMISED_MARKERS: list[str] = [
     "tampered", "compromised", "hissed", "sharp dent", "deep dent",
     "dent on the seam", "dent on seam", "dented seam", "seam dent",
     "seam is dented", "dent on the rim", "dent on rim", "rim dent"
+];
+
+"""Wording that CANCELS a damage word standing after it in the same clause.
+
+A volunteer writes down what they CHECKED, not only what they found: "no dents,
+no bulging, no rust; safety seal intact" describes a sound can. Reading it as a
+damaged one bins edible food - Flaw 1 coming back through a different door - and
+it also silently unlocks the `_discard_allowed` backstop. A negation reaches
+only forward and only inside its own clause, so "no dents but the seam is
+bulging" is still compromised.
+"""
+glob PACKAGING_NEGATIONS: list[str] = [
+    " no ", " not ", " none", " never", " without ", " free of ", " free from ",
+    " n/a", " nothing", " absent", " lacks ", " zero ", " does not ",
+    " doesn't ", " didn't ", " isn't ", " is not ", " are not ", " aren't ",
+    " negative for ", " clear of ", " nil"
+];
+
+"""Clause boundaries. A negation never reaches past one of these."""
+glob CLAUSE_BREAKS: list[str] = [
+    ";", ",", ".", "\n", "|", "/", " but ", " however ", " though ",
+    " although ", " except ", " while ", " yet ", " and "
 ];
 
 glob MONTH_NAMES: dict[str, int] = {
@@ -235,23 +257,6 @@ obj ClearReport {
 # ---------------------------------------------------------------------------
 # Text helpers
 # ---------------------------------------------------------------------------
-
-"""Lowercase, letters and digits only - the form brand strings compare in."""
-def _alnum(text: str) -> str {
-    return re.sub(r"[^a-z0-9]+", "", text.lower());
-}
-
-"""Distinctive lowercase tokens: 3+ chars, corporate noise removed."""
-def _words(text: str) -> list[str] {
-    out: list[str] = [];
-    for piece in re.split(r"[^a-z0-9]+", text.lower()) {
-        w = str(piece);
-        if len(w) >= 3 and w not in MATCH_STOPWORDS and w not in out {
-            out.append(w);
-        }
-    }
-    return out;
-}
 
 """Split an ingredient statement into the phrases a label actually prints."""
 def _fragments(text: str) -> list[str] {
@@ -476,148 +481,61 @@ def _tag_allergens(ingredients_text: str) -> list[AllergenHit] {
 # Recall matching - the fix to Flaw 2
 # ---------------------------------------------------------------------------
 
-"""Brand is matched against the recalling firm AND the product description,
-because the firm is often a co-packer ('Western Mixers Produce & Nuts')
-while the brand on the shelf is a store label ('FIRST STREET') that only
-appears inside the product description."""
-def _brand_matches(brand: str, record: RecallRecord) -> bool {
-    needle = _alnum(brand);
-    if len(needle) < 3 {
-        return False;
+"""Volunteer-facing wording for a tier the shared grader already decided.
+
+The sec-4 tiers themselves are `_classify` in `sweep.sv.jac` - brand alone is
+never enough to block anything, and a `differs` lot is DOWNGRADED to WEAK
+rather than escalated, because a Jif recall must not flag every jar of Jif in
+the building. This function chooses no tier; it only explains one. That is the
+whole reason it stopped having its own matchers."""
+def _note_for(
+    confidence: str, lot: str, product_hit: bool,
+    record: RecallRecord, scanned: str, codes: str
+) -> str {
+    if confidence == CONFIRMED {
+        return (
+            f"Recall {record.recall_number} matches this package on brand, product "
+            f"and lot code. Scanned lot {scanned}; recall codes {codes}. "
+            "Blocked from the shelf - ClearItem will refuse it."
+        );
     }
-    firm = _alnum(record.recalling_firm);
-    desc = _alnum(record.product_description);
-    if len(firm) >= 3 and (needle in firm or firm in needle) {
-        return True;
+    if confidence == POSSIBLE {
+        return (
+            f"Recall {record.recall_number} matches this package on brand and "
+            f"product, but the lot codes were not compared. Scanned lot {scanned}; "
+            f"recall codes {codes}. Compare them by hand before this goes out."
+        );
     }
-    if len(desc) >= 3 and needle in desc {
-        return True;
+    if product_hit and lot == "differs" {
+        return (
+            f"Recall {record.recall_number} covers this brand and product, but the scanned lot "
+            f"{scanned} is not among the recalled codes {codes}, so this package "
+            "looks like a different batch. Informational only."
+        );
     }
-    brand_words = _words(brand);
-    firm_words = _words(record.recalling_firm);
-    shared = [w for w in brand_words if w in firm_words];
-    return len(shared) >= 2;
+    return (
+        f"Recall {record.recall_number} is against this brand but a different "
+        f"product ({record.product_description}). Informational only - the item "
+        "proceeds normally."
+    );
 }
 
-"""Two distinctive words in common, or the item's single distinctive word."""
-def _product_matches(product: str, record: RecallRecord) -> bool {
-    item_words = _words(product);
-    recall_words = _words(record.product_description);
-    if len(item_words) == 0 or len(recall_words) == 0 {
-        return False;
-    }
-    shared = [w for w in item_words if w in recall_words];
-    if len(shared) >= 2 {
-        return True;
-    }
-    return len(item_words) == 1 and len(shared) == 1;
-}
-
-"""The parts of a scanned lot code that are actually a code, not a label."""
-def _lot_tokens(lot_code: str) -> list[str] {
-    out: list[str] = [];
-    for piece in re.split(r"[^a-z0-9]+", lot_code.lower()) {
-        tok = str(piece);
-        if len(tok) >= 4 and tok not in LOT_LABEL_WORDS and tok not in out {
-            out.append(tok);
-        }
-    }
-    return out;
-}
-
-"""Tri-state, and the tri-state is the whole fix to Flaw 2.
-
-`match`        - the scanned lot appears in the recall's code list.
-`differs`      - both codes are legible and the scanned one is NOT in the
-                 recall's list, so this package is not the recalled batch.
-`uncomparable` - one side is missing or unreadable, so a human must compare.
-"""
-def _lot_state(lot_code: str, code_info: str) -> str {
-    tokens = _lot_tokens(lot_code);
-    haystack = _alnum(code_info);
-    if len(tokens) == 0 or len(haystack) < 3 {
-        return "uncomparable";
-    }
-    for tok in tokens {
-        if tok in haystack {
-            return "match";
-        }
-    }
-    return "differs";
-}
-
-"""The sec-4 confidence tiers. Brand alone is never enough to block anything.
-
-A `differs` lot is deliberately DOWNGRADED to WEAK rather than escalated:
-a Jif recall must not flag every jar of Jif in the building, and `differs`
-is positive evidence that this jar is a different batch. The recall is
-still surfaced with its lot codes so a volunteer can overrule the read.
-"""
 def _classify_recall(item: Item, record: RecallRecord) -> RecallMatch | None {
-    if not _brand_matches(item.brand, record) {
+    call = _classify(item, record);
+    if not call.matched {
         return None;
     }
-    product_hit = _product_matches(item.product, record);
     lot = _lot_state(item.lot_code, record.code_info);
     scanned = item.lot_code if item.lot_code.strip() != "" else "(no lot code read)";
     codes = record.code_info if record.code_info.strip() != "" else "(recall lists no lot codes)";
-
-    if product_hit and lot == "match" {
-        return RecallMatch(
-            recall_number=record.recall_number,
-            confidence=CONFIRMED,
-            matched_fields="brand + product + lot code",
-            note=(
-                f"Recall {record.recall_number} matches this package on brand, product "
-                f"and lot code. Scanned lot {scanned}; recall codes {codes}. "
-                "Blocked from the shelf - ClearItem will refuse it."
-            ),
-            scanned_lot=scanned,
-            recall_lot_codes=codes,
-            classification=record.classification,
-            reason=record.reason
-        );
-    }
-    if product_hit and lot == "uncomparable" {
-        return RecallMatch(
-            recall_number=record.recall_number,
-            confidence=POSSIBLE,
-            matched_fields="brand + product; lot code not compared",
-            note=(
-                f"Recall {record.recall_number} matches this package on brand and "
-                f"product, but the lot codes were not compared. Scanned lot {scanned}; "
-                f"recall codes {codes}. Compare them by hand before this goes out."
-            ),
-            scanned_lot=scanned,
-            recall_lot_codes=codes,
-            classification=record.classification,
-            reason=record.reason
-        );
-    }
-    if product_hit {
-        return RecallMatch(
-            recall_number=record.recall_number,
-            confidence=WEAK,
-            matched_fields="brand + product; scanned lot is not in the recall's codes",
-            note=(
-                f"Recall {record.recall_number} covers this brand and product, but the "
-                f"scanned lot {scanned} is not among the recalled codes {codes}, so "
-                "this package looks like a different batch. Informational only."
-            ),
-            scanned_lot=scanned,
-            recall_lot_codes=codes,
-            classification=record.classification,
-            reason=record.reason
-        );
-    }
     return RecallMatch(
         recall_number=record.recall_number,
-        confidence=WEAK,
-        matched_fields="brand only",
-        note=(
-            f"Recall {record.recall_number} is against this brand but a different "
-            f"product ({record.product_description}). Informational only - the item "
-            "proceeds normally."
+        confidence=call.confidence,
+        matched_fields=call.matched_fields,
+        note=_note_for(
+            call.confidence, lot,
+            _product_matched(item.product, record.product_description),
+            record, scanned, codes
         ),
         scanned_lot=scanned,
         recall_lot_codes=codes,
@@ -630,11 +548,65 @@ def _classify_recall(item: Item, record: RecallRecord) -> RecallMatch | None {
 # Verdict guards - the fix to Flaw 1, enforced in code and not only in a prompt
 # ---------------------------------------------------------------------------
 
-def _packaging_compromised(packaging_note: str) -> bool {
-    low = packaging_note.lower();
-    for marker in COMPROMISED_MARKERS {
-        if marker in low {
+"""Cut a packaging note into clauses so a negation cannot leak across one."""
+def _split_clauses(text: str) -> list[str] {
+    parts = [text];
+    for brk in CLAUSE_BREAKS {
+        nxt: list[str] = [];
+        for p in parts {
+            for piece in p.split(brk) {
+                nxt.append(piece);
+            }
+        }
+        parts = nxt;
+    }
+    return [p.strip() for p in parts if p.strip() != ""];
+}
+
+"""Where `marker` starts a word in `clause`, else -1.
+
+Plain substring matching finds "rust" inside "crust" and bins a good box.
+"""
+def _marker_index(clause: str, marker: str) -> int {
+    width = len(marker);
+    i = 0;
+    while i <= len(clause) - width {
+        if clause[i:i + width] == marker and (
+            i == 0 or not clause[i - 1].isalpha()
+        ) {
+            return i;
+        }
+        i += 1;
+    }
+    return -1;
+}
+
+"""True when a negation cue stands before position `idx` in this clause."""
+def _negated_before(clause: str, idx: int) -> bool {
+    head = " " + clause[:idx] + " ";
+    for cue in PACKAGING_NEGATIONS {
+        if cue in head {
             return True;
+        }
+    }
+    return False;
+}
+
+"""True only for damage the note actually REPORTS.
+
+A damage word counts when it starts a word in a clause and no negation stands
+before it in that same clause. So "no bulging" and "no rust" read as a sound
+package, "the seam is bulging" reads as a compromised one, and an empty or
+clean note ("none", "no visible damage", "undamaged") reads as sound rather
+than as damage.
+"""
+def _packaging_compromised(packaging_note: str) -> bool {
+    for clause in _split_clauses(packaging_note.lower()) {
+        for marker in COMPROMISED_MARKERS {
+            idx = _marker_index(clause, marker);
+            if idx >= 0 and not _negated_before(clause, idx) {
+                return True;
+            }
         }
     }
     return False;
@@ -840,8 +812,14 @@ walker:pub IntakeScan {
         if hit is None {
             skip;
         }
+        # The evidence stamp is what lets a later RecallSweep tell "the lot code
+        # was corrected" apart from "the two graders disagree" (see
+        # `_may_rewrite`). Without it a re-grade can never lower this edge.
         item +>:FlaggedBy(
-            confidence=hit.confidence, matched_fields=hit.matched_fields
+            confidence=hit.confidence,
+            matched_fields=_stamp(
+                hit.matched_fields, _evidence_id(item.lot_code, here.code_info)
+            )
         ):+> here;
         self.matches.append(hit);
         self.note(
@@ -901,19 +879,30 @@ walker:pub IntakeScan {
             }
         }
 
-        if item.extraction_confidence < MIN_EXTRACTION_CONFIDENCE and verdict == "keep" {
-            verdict = "review";
-            reasons.append(
-                f"The label read scored {item.extraction_confidence}, below the "
-                "{MIN_EXTRACTION_CONFIDENCE} bar, so a person checks it rather than a "
-                "guess going to the shelf."
-            );
-            self.note(
-                "low_confidence",
-                f"extraction_confidence {item.extraction_confidence} < "
-                f"{MIN_EXTRACTION_CONFIDENCE} -> review.",
-                "rule sec 4"
-            );
+        if item.extraction_confidence < MIN_EXTRACTION_CONFIDENCE {
+            # sec 4 cuts both ways: a read this weak may not put a guess on the
+            # shelf, and it may not put one in the bin either. The category and
+            # the date are both products of THIS read, so a discard resting on
+            # them is worth no more than the read is. Physical damage is an
+            # observation of the package rather than of the label, so a genuinely
+            # compromised container still discards at any confidence.
+            damaged = _packaging_compromised(item.packaging_note);
+            if verdict == "keep" or (verdict == "discard" and not damaged) {
+                was = verdict;
+                verdict = "review";
+                reasons.append(
+                    f"The label read scored {item.extraction_confidence}, below the "
+                    f"{MIN_EXTRACTION_CONFIDENCE} bar, so a person checks this one "
+                    "rather than a guess deciding it."
+                );
+                self.note(
+                    "low_confidence",
+                    f"extraction_confidence {item.extraction_confidence} < "
+                    f"{MIN_EXTRACTION_CONFIDENCE} -> review (was {was}). An unreadable "
+                    "label is never a reason to discard.",
+                    "rule sec 4"
+                );
+            }
         }
 
         for m in weak {

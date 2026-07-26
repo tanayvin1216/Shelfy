@@ -34,6 +34,7 @@ field verbatim or a template around one, so it structurally cannot invent a
 recall. It also means the sweep runs at full speed with no API key.
 """
 
+import hashlib;
 import json;
 import os;
 import from urllib.request { urlopen }
@@ -98,10 +99,34 @@ obj FlaggedItem {
 }
 
 obj NotifyHousehold {
-    """Addressed by anonymous pickup code only - no name, no address, no phone.
-    `notify_contact` is whatever the household opted in with, or empty."""
+    """The call-down list a volunteer works from. Addressed by anonymous pickup
+    code only - no name, no address, no phone.
+
+    What this obj deliberately does NOT carry, and why (spec section 4,
+    "Privacy" - the privacy design is a feature we demo, not an oversight):
+
+      `notify_contact`  The household's self-supplied phone or email. It is the
+        one field on `Household` that can identify a person, it is opt-in, and
+        it was supplied for ONE purpose - so that the pantry can reach them
+        about a recall. Publishing it in a walker report inverts that consent.
+        A volunteer does not need the value to work the list either: they need
+        to know whether the household can be phoned at all, which is what
+        `contact_on_file` says. The value itself stays on the Household node,
+        where whatever actually sends the notice can read it, and never crosses
+        the wire.
+
+      second-precision pickup times  `Received.timestamp` is stored to the
+        second. A published list of {pickup code, item, 10:20:00} is a
+        re-identification key: anyone who watched the line on that Saturday can
+        tie a real face to an anonymous code and to what that person took home.
+        Recall triage only ever needs "how long has this been in someone's
+        cupboard", so `picked_up_at` is reported as the calendar DAY.
+
+    Everything left is either anonymous by design (`pickup_code`, section 4) or
+    is a fact about the recalled food rather than about a person.
+    """
     has pickup_code: str,
-        notify_contact: str,
+        contact_on_file: bool,
         preferred_language: str,
         picked_up_at: str,
         item_id: str,
@@ -131,7 +156,10 @@ obj SweepReport {
         pull_from_shelf: list[FlaggedItem],
         informational: list[FlaggedItem],
         notify_households: list[NotifyHousehold],
-        trace: list[SweepHop];
+        trace: list[SweepHop],
+        # Flags the sweep re-graded LOWER and then refused to write, because the
+        # evidence behind the original grade had not changed. See `_may_rewrite`.
+        flags_held: int = 0;
 }
 
 obj MatchCall {
@@ -258,12 +286,49 @@ glob NOISE_WORDS: list[str] = [
     "and", "with", "for", "all", "new", "fl"
 ];
 
-"""Words that appear around a lot code rather than being one."""
-glob CODE_NOISE: list[str] = [
-    "lot", "lots", "code", "codes", "number", "numbers", "best", "bb", "by",
-    "use", "exp", "expiration", "date", "dates", "mfg", "manufacture",
-    "manufactured", "upc", "sell", "all", "and", "the", "of", "before", "sku"
+"""Words that appear around a lot code rather than being one.
+
+This vocabulary and the functions below are the single lot-code matcher for the
+whole product: `intake.sv.jac` imports from here rather than keeping its own
+copy, because an item that reads CONFIRMED at the intake desk and WEAK during
+the sweep - or the reverse - is a silent safety bug."""
+glob LOT_LABEL_WORDS: list[str] = [
+    "lot", "lots", "batch", "batches", "code", "codes", "number", "numbers",
+    "no", "bb", "best", "by", "before", "use", "used", "using", "exp",
+    "expires", "expiration", "expiry", "date", "dates", "mfg", "manufacture",
+    "manufactured", "sell", "sold", "est", "ubd", "item",
+    "if", "and", "the", "of", "all",
+    # "Lot Code(s):" tokenises to LOT / CODE / S, and that stray S would
+    # otherwise glue itself to the front of the code that follows it.
+    "s",
+    # The product-identifier labels below are also run boundaries.
+    "upc", "upcs", "gtin", "gtins", "ean", "sku", "skus", "barcode",
+    "barcodes", "plu", "bar"
 ];
+
+"""Labels whose digits identify a PRODUCT LINE, not a batch.
+
+A UPC is printed on every unit a firm has ever made, so a UPC is the exact
+opposite of a lot code: matching on one condemns the entire product line, which
+is v1's Flaw 2 wearing a different hat. openFDA `code_info` mixes the two
+freely - H-1146-2026 reads `UPC: 041262288874 ... Lot Codes (expiration date):
+AUG0326, AUG1026, AUG1726` - so a volunteer who transcribes the barcode into
+the lot field would otherwise read CONFIRMED against every bag Wise ever
+packed.
+
+Digits following one of these labels are therefore dropped, not collected. The
+suppression ends at the next label word or the next break character, so the
+`AUG0326` list later in that same field is still read normally."""
+glob PRODUCT_ID_LABEL_WORDS: list[str] = [
+    "upc", "upcs", "gtin", "gtins", "ean", "sku", "skus", "barcode",
+    "barcodes", "plu", "bar"
+];
+
+"""A comma, a semicolon or a line break genuinely ends one lot code and starts
+the next. Every OTHER separator - space, dash, slash, dot, colon - is cosmetic
+printing, and treating it as a boundary is what made `AUG 03 26` read as a
+different batch from `AUG0326`."""
+glob LOT_BREAK_CHARS: str = ",;\n\r";
 
 def _alnum_words(text: str) -> list[str] {
     out: list[str] = [];
@@ -294,11 +359,108 @@ def _signal_words(text: str) -> list[str] {
     return out;
 }
 
-def _code_words(text: str) -> list[str] {
+"""Does this look like a printed lot code rather than a stray word or a year?
+
+A code always carries a digit. Beyond that the bar is deliberately different
+for the two shapes: a mixed letter/digit string is distinctive at 4 characters
+(`L4409`, `AUG0326`), while a bare number needs 5 before it stops colliding
+with the years and quantities that share the same field ('2027', '9 oz')."""
+def _is_code_like(token: str) -> bool {
+    has_digit = False;
+    has_letter = False;
+    for character in token {
+        if character.isdigit() {
+            has_digit = True;
+        } elif character.isalpha() {
+            has_letter = True;
+        }
+    }
+    if not has_digit {
+        return False;
+    }
+    if has_letter {
+        return len(token) >= 4;
+    }
+    return len(token) >= 5;
+}
+
+"""The codes one uninterrupted run of words spells: the run glued back together,
+plus each word that is code-like on its own.
+
+Both are needed. `JUL 07 2027` is one code printed with spaces, so the glue is
+what matches it; `- 408125075E14F2 - 708125076E14F2 -` is a dash-separated LIST,
+so the individual words are what match it."""
+def _lot_forms(run: list[str]) -> list[str] {
+    forms: list[str] = [];
+    if len(run) == 0 {
+        return forms;
+    }
+    glued = "".join(run);
+    if _is_code_like(glued) {
+        forms.append(glued);
+    }
+    for token in run {
+        if _is_code_like(token) and token not in forms {
+            forms.append(token);
+        }
+    }
+    return forms;
+}
+
+"""Read a free-text code field as the set of lot codes it actually names.
+
+openFDA `code_info` is typed by a person at the recalling firm, so the same
+code shows up as `AUG0326`, `AUG 03 26`, `Lot Code(s): 26J000059877-01` or
+`Best If Used By: JUL 07 2027`. Spacing, dashes, slashes and case carry no
+meaning and must not demote a real match to WEAK - a WEAK match leaves the jar
+on the shelf and never names the household that took one home.
+
+What DOES end a code: a break character, or a label word. Everything between
+two of those is one code. Nothing here loosens the match itself: comparison is
+still equality between whole codes, so a genuinely different batch still
+differs and the item stays available (spec section 4, flaw 2).
+
+What is DELIBERATELY NOT collected: a digit run introduced by a product-line
+label (see PRODUCT_ID_LABEL_WORDS). `suppressed` carries that state across the
+run that follows the label and is cleared by the next label word or break."""
+def _lot_candidates(text: str) -> list[str] {
     out: list[str] = [];
-    for word in _alnum_words(text) {
-        if len(word) >= 3 and word not in CODE_NOISE and word not in out {
-            out.append(word);
+    run: list[str] = [];
+    token = "";
+    suppressed = False;
+    for character in text.upper() + "\n" {
+        if character.isalnum() {
+            token += character;
+            continue;
+        }
+        ends_run = character in LOT_BREAK_CHARS;
+        next_suppressed = suppressed;
+        if token != "" {
+            low = token.lower();
+            if low in LOT_LABEL_WORDS {
+                ends_run = True;
+                # A product-line label opens a suppressed region; any other
+                # label word closes one ("UPC: 123 Lot: 456" keeps 456).
+                next_suppressed = low in PRODUCT_ID_LABEL_WORDS;
+            } else {
+                run.append(token);
+            }
+            token = "";
+        }
+        if character in LOT_BREAK_CHARS {
+            next_suppressed = False;
+        }
+        if ends_run {
+            # The run just closed belongs to the state it was collected under.
+            if not suppressed {
+                for form in _lot_forms(run) {
+                    if form not in out {
+                        out.append(form);
+                    }
+                }
+            }
+            run = [];
+            suppressed = next_suppressed;
         }
     }
     return out;
@@ -308,33 +470,90 @@ def _shared(left: list[str], right: list[str]) -> list[str] {
     return [word for word in left if word in right];
 }
 
+def _compact(text: str) -> str {
+    return "".join(_alnum_words(text));
+}
+
 """A recall names the firm that recalled it, which is often NOT the brand on
 the package - Western Mixers recalls a jar labelled FIRST STREET. So the
-brand is checked against the firm AND the product description."""
+brand is checked against the firm AND the product description.
+
+THE definition. `intake.sv.jac` has none of its own: for a while it kept a
+parallel copy, the two drifted, and an item the desk graded CONFIRMED came back
+from the sweep as WEAK - which un-blocked it and dropped the household that had
+already taken one home. Brand alone never blocks anything (it caps out at WEAK),
+so this is deliberately the union of every shape either copy accepted rather
+than the intersection."""
 def _brand_hit(brand: str, firm: str, description: str) -> bool {
+    tight = _compact(brand);
+    if len(tight) < 3 {
+        return False;
+    }
+    # 1. The brand string appears whole inside the firm or the description
+    #    ("WISE" inside "Wise Foods Inc"; "FIRST STREET" inside the description).
+    firm_tight = _compact(firm);
+    if len(firm_tight) >= 3 and (tight in firm_tight or firm_tight in tight) {
+        return True;
+    }
+    description_tight = _compact(description);
+    if len(description_tight) >= 3 and tight in description_tight {
+        return True;
+    }
     wanted = _signal_words(brand);
     if len(wanted) == 0 {
         return False;
     }
-    haystack = _signal_words(firm) + _signal_words(description);
-    return len(_shared(wanted, haystack)) == len(wanted);
+    # 2. Every distinctive word of the brand is somewhere in the recall.
+    if len(_shared(wanted, _signal_words(firm) + _signal_words(description))) == len(wanted) {
+        return True;
+    }
+    # 3. Two distinctive words shared with the firm name.
+    return len(_shared(wanted, _signal_words(firm))) >= 2;
 }
 
 def _product_hit(product: str, description: str) -> list[str] {
     return _shared(_signal_words(product), _signal_words(description));
 }
 
-"""Three-valued on purpose. 'differs' is not 'no information' - a legible lot
-code that is absent from the recall's code list is positive evidence that
-THIS jar is not the recalled jar, and that is the whole fix to v1's flaw 2."""
+"""Does the item's product name describe the recalled product?
+
+Two distinctive words in common, or - when the item's name only HAS one
+distinctive word ('Raisins') - that one word. The single-word case is why this
+is one function and not two: the sweep used to require two words flat, so a
+one-word product that intake graded CONFIRMED was re-graded WEAK on the next
+sweep. This is still nowhere near brand-only matching: CONFIRMED additionally
+requires the lot code to match."""
+def _product_matched(product: str, description: str) -> bool {
+    words = _signal_words(product);
+    if len(words) == 0 {
+        return False;
+    }
+    overlap = _product_hit(product, description);
+    if len(overlap) >= 2 {
+        return True;
+    }
+    return len(words) == 1 and len(overlap) == 1;
+}
+
+"""Three-valued on purpose, and shared with the intake desk.
+
+`match`    a code the item carries is one of the codes the recall names.
+`differs`  both sides are legible and no code is common - positive evidence
+           that THIS jar is not the recalled jar. That is the fix to v1's
+           flaw 2 and it survives the formatting fix: normalising away spaces
+           and dashes never turns a different batch into a match.
+`unknown`  one side names no code at all. Absence of evidence, so POSSIBLE -
+           a human compares the printed code by hand."""
 def _lot_state(item_lot: str, code_info: str) -> str {
-    mine = _code_words(item_lot);
-    theirs = _code_words(code_info);
+    mine = _lot_candidates(item_lot);
+    theirs = _lot_candidates(code_info);
     if len(mine) == 0 or len(theirs) == 0 {
         return "unknown";
     }
-    if len(_shared(mine, theirs)) > 0 {
-        return "match";
+    for code in mine {
+        if code in theirs {
+            return "match";
+        }
     }
     return "differs";
 }
@@ -353,8 +572,7 @@ def _classify(item: Item, record: RecallRecord) -> MatchCall {
         return MatchCall(matched=False, confidence="", matched_fields="");
     }
 
-    overlap = _product_hit(item.product, record.product_description);
-    if len(overlap) < 2 {
+    if not _product_matched(item.product, record.product_description) {
         return MatchCall(
             matched=True,
             confidence=WEAK,
@@ -362,7 +580,7 @@ def _classify(item: Item, record: RecallRecord) -> MatchCall {
         );
     }
 
-    shared_words = ", ".join(overlap);
+    shared_words = ", ".join(_product_hit(item.product, record.product_description));
     state = _lot_state(item.lot_code, record.code_info);
 
     if state == "match" {
@@ -393,6 +611,64 @@ def _classify(item: Item, record: RecallRecord) -> MatchCall {
     );
 }
 
+# ---------------------------------------------------------------------------
+# Flag durability - a grade a human was told to act on is not silently undone
+# ---------------------------------------------------------------------------
+
+"""Severity order. Anything unrecognised ranks 0 so it can only ever be
+raised, never used to lower a real grade."""
+glob TIER_ORDER: list[str] = [WEAK, POSSIBLE, CONFIRMED];
+
+def _tier_rank(confidence: str) -> int {
+    if confidence in TIER_ORDER {
+        return TIER_ORDER.index(confidence) + 1;
+    }
+    return 0;
+}
+
+"""A fingerprint of the two facts a tier is derived from: the codes the item
+carries and the codes the recall names. If it is unchanged, a re-run that
+produces a different tier is a code disagreement, not new information."""
+def _evidence_id(item_lot: str, code_info: str) -> str {
+    basis = ",".join(_lot_candidates(item_lot)) + "#" + ",".join(_lot_candidates(code_info));
+    return hashlib.sha1(basis.encode("utf-8")).hexdigest()[:10];
+}
+
+glob EVIDENCE_OPEN: str = " [ev:";
+
+def _stamp(matched_fields: str, evidence: str) -> str {
+    return matched_fields + EVIDENCE_OPEN + evidence + "]";
+}
+
+def _evidence_of(matched_fields: str) -> str {
+    if EVIDENCE_OPEN not in matched_fields {
+        return "";
+    }
+    return matched_fields.split(EVIDENCE_OPEN)[-1].split("]")[0];
+}
+
+"""May a re-evaluation overwrite an existing FlaggedBy edge?
+
+Upgrades always. Downgrades ONLY when the evidence fingerprint on the edge
+differs from the one just computed - that is a volunteer correcting a smudged
+lot code, or openFDA republishing `code_info`, and it must still be able to
+release an item that genuinely is not covered.
+
+A downgrade with the SAME fingerprint means two code paths disagreed. Spec
+section 4 gives a human control of the shelf: once someone has been told to
+hold a jar, a background re-run must not quietly hand it back, un-clear the
+CONFIRMED gate in `ClearItem`, and drop the household that already took one
+home from `notify_households`. So that write is refused and counted."""
+def _may_rewrite(
+    old_confidence: str, old_fields: str, new_confidence: str, new_evidence: str
+) -> bool {
+    if _tier_rank(new_confidence) >= _tier_rank(old_confidence) {
+        return True;
+    }
+    old_evidence = _evidence_of(old_fields);
+    return old_evidence != "" and old_evidence != new_evidence;
+}
+
 def _action_for(confidence: str) -> str {
     if confidence == CONFIRMED {
         return "Pull from the shelf now. Do not distribute.";
@@ -401,6 +677,13 @@ def _action_for(confidence: str) -> str {
         return "Move to the review queue and compare the printed code against the recall code list.";
     }
     return "No action. Same brand, different product or different lot - the item stays available.";
+}
+
+"""Drop the clock off an ISO pickup timestamp. Second-precision pickup times
+in an anonymous report are a re-identification key (see NotifyHousehold); the
+day is all recall triage needs."""
+def _pickup_day(timestamp: str) -> str {
+    return timestamp.split("T")[0];
 }
 
 """The household-facing sentence. Every fact in it comes from the openFDA
@@ -449,6 +732,18 @@ walker:pub RecallSweep {
     Idempotent: re-running updates the RecallRecord nodes in place, updates
     existing FlaggedBy edges instead of stacking duplicates, and reports the
     same two lists. `flags_created` vs `flags_existing` is the proof.
+
+    Why this is `:pub` even though it is a staff operation. Spec section 1
+    reserves `:pub` for client-facing search, and a sweep is volunteer work -
+    but `:priv` in jaclang 0.16.7 gives each caller an ISOLATED root, which
+    would hand the sweep an empty pantry and break it outright rather than
+    protect it. There is no per-request auth tier to hide behind, so the
+    protection is placed where it actually holds: nothing this walker reports
+    identifies a person. Pickup codes are anonymous by design (section 4) and
+    naming them is the point of the sweep; the two fields that were NOT
+    anonymous - the opt-in contact method and the second-precision pickup time
+    - are redacted in `NotifyHousehold`, which documents each one. Read that
+    obj before adding a field here: the report shape is the access control.
     """
 
     has live: bool = True;
@@ -472,6 +767,7 @@ walker:pub RecallSweep {
     has items_scanned: int = 0;
     has flags_created: int = 0;
     has flags_existing: int = 0;
+    has flags_held: int = 0;
     has flagged_item_ids: list[str] = [];
     has pull_from_shelf: list[FlaggedItem] = [];
     has informational: list[FlaggedItem] = [];
@@ -580,15 +876,35 @@ walker:pub RecallSweep {
             }
             hit_any = True;
 
+            evidence = _evidence_id(here.lot_code, record.code_info);
+            # What the EDGE ends up saying, which is not always what this run
+            # computed - a refused downgrade leaves the older, higher grade
+            # standing and everything below reports that instead.
+            standing = call.confidence;
+            standing_fields = call.matched_fields;
+
             fresh = True;
             for link in [edge here ->:FlaggedBy:-> record] {
                 fresh = False;
-                link.confidence = call.confidence;
-                link.matched_fields = call.matched_fields;
+                if _may_rewrite(
+                    link.confidence, link.matched_fields, call.confidence, evidence
+                ) {
+                    link.confidence = call.confidence;
+                    link.matched_fields = _stamp(call.matched_fields, evidence);
+                } else {
+                    standing = link.confidence;
+                    standing_fields = (
+                        link.matched_fields.split(EVIDENCE_OPEN)[0]
+                        + f" (held: a re-check graded this {call.confidence} on "
+                        + "unchanged evidence, so the earlier grade stands)"
+                    );
+                    self.flags_held += 1;
+                }
             }
             if fresh {
                 here +>:FlaggedBy(
-                    confidence=call.confidence, matched_fields=call.matched_fields
+                    confidence=call.confidence,
+                    matched_fields=_stamp(call.matched_fields, evidence)
                 ):+> record;
                 self.flags_created += 1;
             } else {
@@ -597,12 +913,12 @@ walker:pub RecallSweep {
 
             # Never discard on a recall match. CONFIRMED and POSSIBLE pull the
             # item back for a human; WEAK leaves it exactly where it was.
-            if call.confidence == CONFIRMED or call.confidence == POSSIBLE {
+            if standing == CONFIRMED or standing == POSSIBLE {
                 here.cleared = False;
                 here.verdict = "review";
                 here.verdict_reason = (
                     f"Recall {record.recall_number}: {record.reason} "
-                    + f"[{call.confidence}: {call.matched_fields}]"
+                    + f"[{standing}: {standing_fields}]"
                 );
             }
 
@@ -615,15 +931,15 @@ walker:pub RecallSweep {
                 shelf=(shelves[0].name if len(shelves) > 0 else ""),
                 on_shelf=(len(shelves) > 0),
                 verdict=here.verdict,
-                confidence=call.confidence,
-                matched_fields=call.matched_fields,
+                confidence=standing,
+                matched_fields=standing_fields,
                 recall_number=record.recall_number,
                 classification=record.classification,
                 recall_reason=record.reason,
                 recall_code_info=record.code_info,
-                action=_action_for(call.confidence)
+                action=_action_for(standing)
             );
-            if call.confidence == WEAK {
+            if standing == WEAK {
                 self.informational.append(entry);
             } else {
                 self.pull_from_shelf.append(entry);
@@ -670,11 +986,13 @@ walker:pub RecallSweep {
                         4, "Household", "backward",
                         f"pickup code {here.pickup_code}", jid(here)
                     );
+                    # Redacted on the way out, not at the UI: this walker is
+                    # :pub, so this obj IS the anonymous response.
                     self.notify_households.append(NotifyHousehold(
                         pickup_code=here.pickup_code,
-                        notify_contact=here.notify_contact,
+                        contact_on_file=(here.notify_contact != ""),
                         preferred_language=here.preferred_language,
-                        picked_up_at=picked_up,
+                        picked_up_at=_pickup_day(picked_up),
                         item_id=jid(item),
                         brand=item.brand,
                         product=item.product,
@@ -718,7 +1036,8 @@ walker:pub RecallSweep {
             pull_from_shelf=self.pull_from_shelf,
             informational=self.informational,
             notify_households=self.notify_households,
-            trace=self.trace
+            trace=self.trace,
+            flags_held=self.flags_held
         );
     }
 }
