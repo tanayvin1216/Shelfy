@@ -1,0 +1,10 @@
+[project]
+name = "backshelf"
+version = "0.1.0"
+entry-point = "main.jac"
+kind = "api-service"
+
+[dependencies]
+
+[serve]
+port = 8031

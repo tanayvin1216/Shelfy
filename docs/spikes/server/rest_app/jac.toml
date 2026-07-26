@@ -1,0 +1,7 @@
+[project]
+name = "rest_app"
+version = "0.1.0"
+entry-point = "main.sv.jac"
+kind = "api-service"
+
+[dependencies]
