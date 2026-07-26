@@ -42,7 +42,9 @@ fi
 
 echo
 echo "==> verifying the toolchain"
-./.venv/bin/jac --version | head -3
+# Capture rather than pipe — jac's banner blows up with BrokenPipeError against `head`.
+jac_version="$(./.venv/bin/jac --version 2>/dev/null)"
+printf '%s\n' "$jac_version" | grep -iE "version|jaclang|byllm|plugin" || printf '%s\n' "$jac_version"
 
 echo
 echo "ready."
