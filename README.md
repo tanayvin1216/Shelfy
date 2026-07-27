@@ -89,16 +89,41 @@ traversal in miniature and is the best single file to read first.
 
 ---
 
-## Without a Gemini key
+## The Gemini key — one place, one command
 
-The app runs fine without one. `llm.sv.jac` switches on `GEMINI_API_KEY`:
+The key goes in **`.env` at the repo root** and nowhere else.
 
-- **key set** → real Gemini through byLLM, real label extraction from photos
-- **key unset** → `DemoLLM`, a MockLLM subclass that returns canned structured output
+```bash
+cp .env.example .env        # paste the key on the GEMINI_API_KEY= line
+./.venv/bin/jac start main.jac
+```
 
-MockLLM proves every code path executes, but the label scan is not real — it returns
-fixed values regardless of the photo. Get a key at
-[aistudio.google.com/apikey](https://aistudio.google.com/apikey) and put it in `.env`.
+That is the whole procedure. No `export`, no second file, no flag. `jac start` reads
+`.env` on its own: byLLM imports litellm, litellm calls `load_dotenv()` at import
+time, and that search walks up from `.venv/lib/.../site-packages/litellm` to the repo
+root and finds it.
+
+Verified by execution, both directions: with only `.env` on disk and `GEMINI_API_KEY`
+absent from the shell, `IntakeScan` reached `generativelanguage.googleapis.com`.
+Deleting `.env` put the same call back on the fallback with `using_mock_llm: true`.
+
+The switch is `_select_model` at `llm.sv.jac:480–491` and reads exactly one variable:
+
+- **`GEMINI_API_KEY` set** → real Gemini through byLLM, real label extraction from photos
+- **`GEMINI_API_KEY` unset** → `DemoLLM`, a MockLLM subclass returning canned structured output
+
+The model is chosen once, at import. **Restart the server after adding the key.**
+
+MockLLM proves every code path executes, but the label read is not real — it returns
+fixed values regardless of the photo, which is why `scripts/eval.sh` refuses to print
+an accuracy number in that mode. Get a key at
+[aistudio.google.com/apikey](https://aistudio.google.com/apikey).
+
+> **Deployed, `.env` does not apply.** In the Dockerfile the venv is `/opt/venv` and
+> the code is `/app`, so `load_dotenv()` walks up from `/opt/venv` and never reaches
+> `/app/.env` — and `.env` is gitignored and dockerignored, so it is not in the image
+> at all. On Railway set `GEMINI_API_KEY` in the service Variables tab instead and
+> redeploy. Nothing in the code changes; `os.getenv` finds it either way.
 
 ---
 
@@ -110,10 +135,13 @@ recall records, so `RecallSweep` would traverse backwards and find nothing.
 
 ```bash
 ./scripts/setup.sh          # venv + deps + npm, from scratch
-./scripts/demo.sh           # seeds pantry, shelves, allergens, demo households + items
+./scripts/demo.sh --reset   # starts a server, seeds everything, replays the demo
 ```
 
-`SeedPantry` is idempotent — running it twice will not duplicate nodes.
+`SeedPantry` and `SeedDemo` are both idempotent — running them twice will not
+duplicate nodes, so `./scripts/demo.sh` on its own is safe to re-run. Use `--reset`
+before demoing anyway: without it every run leaves another scanned can on the shelf
+and the listings get noisy.
 
 > **If you redeploy, you must re-seed.** The SQLite file lives in the container's
 > filesystem and is wiped on every deploy. Seed *after* the final deploy, then don't
@@ -126,21 +154,130 @@ recall records, so `RecallSweep` would traverse backwards and find nothing.
 Everything below is Jac. There is no database layer, no hand-written REST route, and
 no prompt string anywhere in the codebase.
 
-| What | File | Notes |
+**If you read one thing, read `sweep.sv.jac:960`.** That single `visit` is the
+backward traversal from a recalled can to the households holding it, and it is the
+reason this project is written in Jac.
+
+### The graph
+
+| What | Where | Notes |
 |---|---|---|
-| Graph schema | `graph.sv.jac:56–135` | 7 node types, 6 typed edge types carrying attributes |
-| Idempotent seed | `graph.sv.jac:356` | `walker:pub SeedPantry` |
-| View projections | `graph.sv.jac:141–226` | UI-renderable objects, not raw nodes |
-| Label extraction | `llm.sv.jac:134` | `def extract_label(photo: Image, ...) -> LabelRead by llm()` |
-| Constraint parsing | `llm.sv.jac:335` | free text → allergen names, `by llm()` |
-| Model switch | `llm.sv.jac:446–468` | Gemini ⇄ MockLLM on one env var |
-| Intake + clearance | `intake.sv.jac` | `IntakeScan`, `ClearItem` |
-| Client search | `client_search.sv.jac` | `MatchNeeds`, `walker:pub` |
-| **Backward recall sweep** | `sweep.sv.jac` | `RecallSweep` — the traversal the project exists for |
-| Client UI | `frontend.cl.jac`, `components/` | `.cl.jac` components, JSX + reactive `has` state |
+| Node types | `graph.sv.jac:56–110` | `Pantry`, `Shelf`, `Allergen`, `Household`, `RecallFeed`, `RecallRecord`, `Item` |
+| Typed edges | `graph.sv.jac:116–135` | `Stocks`, `Contains`, `FlaggedBy`, `Avoids`, `Received`, `Lists` — four carry attributes |
+| View projections | `graph.sv.jac:141–225` | walkers report these objects, never raw nodes |
+| Graph helpers | `graph.sv.jac:241–350` | lookups by reachability from `root`; no query language, no ORM |
+
+### The walkers — each one is an endpoint
+
+| Walker | Where | Notes |
+|---|---|---|
+| `SeedPantry` | `graph.sv.jac:356–408` | `walker:pub`, idempotent |
+| `SeedDemo` | `demo.sv.jac:125–201` | Maria's distribution history |
+| `IntakeScan` | `intake.sv.jac:636–935` | abilities at `675` Root, `686` Shelf, `792` RecallFeed, `804` RecallRecord, `832` RecallFeed exit |
+| `ClearItem` | `intake.sv.jac:941–1061` | **refusal gate at `992–1025`** — a `CONFIRMED` `FlaggedBy` edge cannot be cleared |
+| `MatchNeeds` | `client_search.sv.jac:134–304` | `walker:pub`; abilities at `168`, `188`, `208`, `222`, `261` |
+| **`RecallSweep`** | `sweep.sv.jac:725–1043` | **the backward traversal is `sweep.sv.jac:960`** |
+
+`RecallSweep`'s traversal, in the order the abilities fire:
+
+| Line | Ability | Direction |
+|---|---|---|
+| `sweep.sv.jac:788` | `enter_root with Root entry` | spawn |
+| `sweep.sv.jac:849` | `sync with RecallFeed entry` → `visit [here <--]` | **backward** to the Pantry |
+| `sweep.sv.jac:852` | `span_pantry with Pantry entry` | forward to Shelves and Households |
+| `sweep.sv.jac:858` | `scan_shelf with Shelf entry` → `visit [here ->:Stocks:->]` | forward, typed |
+| `sweep.sv.jac:864` | `check_item with Item entry` | classifies, writes `FlaggedBy` |
+| **`sweep.sv.jac:960`** | `visit [here <-:Received:<-]` | **backward, to the households** |
+| `sweep.sv.jac:964` | `notify with Household entry` | builds the notice |
+| `sweep.sv.jac:1018` | `finish with RecallFeed exit` | assembles the report |
+
+### byLLM — signature and `sem` are the prompt
+
+| Function | Where | Notes |
+|---|---|---|
+| `extract_label` | `llm.sv.jac:139–155` | `(photo: Image, hint: str) -> LabelRead by llm(temperature=0.0)` |
+| `shelf_life_verdict` | `llm.sv.jac:198–278` | the §4 shelf-life table lives in `sem` at `205–278`; this is the fix to Flaw 1 |
+| `explain_for_client` | `llm.sv.jac:309–356` | plain language, any language, "the label lists" framing |
+| `resolve_constraints` | `llm.sv.jac:362–392` | free text → allergen tag names |
+| Model switch | `llm.sv.jac:480–491` | Gemini ⇄ MockLLM on one env var |
+| Recall tiering | `sweep.sv.jac:570–612` | `_classify` — the single source of the CONFIRMED/POSSIBLE/WEAK decision |
+| Lot-code parsing | `sweep.sv.jac:426–467` | `_lot_candidates`, which is what makes matching lot-aware instead of brand-only |
+
+Every `sem` block is the prompt. There is no f-string, no `.format`, and no
+hand-assembled message list anywhere in this repo.
+
+### The client
+
+| What | Where |
+|---|---|
+| Client UI | `frontend.cl.jac`, `frontend.impl.jac`, `components/` |
+| Entry point + `cl { }` block | `main.jac` |
 
 Walkers auto-generate `POST /walker/<Name>`. `GET /walkers` lists them.
 Pass `_jac_spawn_node` in the body to spawn a walker on a specific node.
+
+---
+
+## Demo
+
+One command replays the whole four-minute demo against a live server:
+
+```bash
+./scripts/demo.sh --reset
+```
+
+`--reset` wipes `.jac/data/main.db*`, starts `jac start main.jac` on port 8390,
+waits for walker registration and then walks every beat in order: seed → scan →
+past-date item routed to REVIEW → clear → client search in Spanish → **`RecallSweep`
+naming the pickup codes** → the refusal gate → the same client search again, now
+filtered by a graph that changed underneath it.
+
+It takes about 10 seconds end to end on the MockLLM fallback and is safe to re-run
+while rehearsing. Without `--reset` it replays against whatever server is already
+up (about 2 seconds), which is what you want mid-rehearsal.
+
+```bash
+./scripts/demo.sh                                   # against a running local server
+./scripts/demo.sh --base https://backshelf-production.up.railway.app
+./scripts/demo.sh --reset --no-live                 # skip the openFDA network call
+BACKSHELF_PHOTO=$(base64 -i can.jpg | tr -d '\n') ./scripts/demo.sh   # scan a real photo
+```
+
+The money shot, verbatim from a real run:
+
+```
+  === HOUSEHOLDS TO NOTIFY - reached by walking Received BACKWARDS ===
+   pickup code 4471  [CONFIRMED]  lang=en  contact on file=True  picked up 2026-07-18
+   pickup code 8830  [CONFIRMED]  lang=es  contact on file=False picked up 2026-07-18
+   pickup code 2210  [POSSIBLE]   lang=en  contact on file=False picked up 2026-07-19
+
+  === TRAVERSAL ===
+   depth 0  >>> spawn    RecallFeed  openFDA feed
+   depth 1  <<< backward Pantry      Backshelf Community Pantry
+   depth 2  >>> forward  Shelf       canned goods
+   depth 3  >>> forward  Item        FIRST STREET Dark Chocolate Raisins 9 oz
+   depth 4  <<< backward Household   pickup code 4471
+   depth 4  <<< backward Household   pickup code 8830
+   depth 4  <<< backward Household   pickup code 2210
+```
+
+### Real-photo eval
+
+```bash
+./scripts/eval.sh <dir-of-label-photos>
+./scripts/eval.sh assets/labels --truth assets/labels/truth.csv
+```
+
+Every photo goes through `IntakeScan` exactly as the phone client sends it. The
+summary reports the §4 routing distribution, how many past-date items were *not*
+discarded, and self-reported extraction confidence.
+
+**It will not print an accuracy number it cannot justify.** On the MockLLM fallback
+the same canned label comes back for every photo, so the script says so and reports
+only the routing distribution. With a Gemini key it lists the per-photo reads, and
+scores per-field accuracy only if you supply a `--truth` CSV
+(`filename,brand,product,date_value,date_type,lot_code`). Reporting accuracy
+without ground truth would be guessing, so it refuses to.
 
 ---
 
