@@ -75,9 +75,8 @@ impl app.runScan -> None {
     scanSecs = f"{(ended - started) / 1000.0:.1f}";
     # Deliberately after the clock stops: this extra spawn must not inflate the
     # under-ten-seconds number on screen. It is here so that a scan made with a
-    # bad key updates the model panel's error line instead of leaving the
-    # volunteer looking at a green GEMINI banner and a canned green-bean result
-    # with nothing explaining the gap.
+    # bad key updates the model panel to DEMO MODE instead of leaving the
+    # volunteer looking at a green GEMINI banner beside a canned label.
     llmState = (root spawn LlmStatus()).reports[0];
     intake = res;
     lastItemId = res.item.id;

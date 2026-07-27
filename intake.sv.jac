@@ -5,13 +5,13 @@ and `POST /walker/ClearItem`; there is no hand-written route anywhere.
 
 The two spec flaws this module exists to fix:
 
-  Flaw 1 (v1 discarded past-date food).  `shelf_life_verdict` carries the sec-4
+  Date-only discard. `shelf_life_verdict` carries the sec-4
   shelf-life table in its semstring, and `_discard_allowed` below is the
   defence-in-depth: even if the model returns `discard`, the WALKER refuses to
   honour it unless one of the four hard-discard conditions is physically true.
   A past date on its own can never produce a discard verdict on this code path.
 
-  Flaw 2 (v1 flagged whole brands).  `_classify_recall` matches on brand AND
+  Brand-only recall matching. `_classify_recall` matches on brand AND
   product AND lot code, and returns the sec-4 confidence tier. A scanned lot
   that is demonstrably NOT in the recall's `code_info` is downgraded, not
   escalated - that is the entire point. Nothing is ever auto-discarded on a
@@ -852,8 +852,7 @@ walker:pub IntakeScan {
                 "verdict_override",
                 "The model returned discard, but none of the four hard-discard "
                 "conditions is true for this package - date labels are quality dates, "
-                "not safety dates, so the walker overrode discard to review. v1 would "
-                "have thrown this out.",
+                "not safety dates, so the walker overrode discard to review.",
                 "rule sec 4"
             );
             verdict = "review";

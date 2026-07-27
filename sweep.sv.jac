@@ -309,8 +309,8 @@ glob LOT_LABEL_WORDS: list[str] = [
 """Labels whose digits identify a PRODUCT LINE, not a batch.
 
 A UPC is printed on every unit a firm has ever made, so a UPC is the exact
-opposite of a lot code: matching on one condemns the entire product line, which
-is v1's Flaw 2 wearing a different hat. openFDA `code_info` mixes the two
+opposite of a lot code: matching on one condemns the entire product line.
+openFDA `code_info` mixes the two
 freely - H-1146-2026 reads `UPC: 041262288874 ... Lot Codes (expiration date):
 AUG0326, AUG1026, AUG1726` - so a volunteer who transcribes the barcode into
 the lot field would otherwise read CONFIRMED against every bag Wise ever
@@ -539,8 +539,8 @@ def _product_matched(product: str, description: str) -> bool {
 
 `match`    a code the item carries is one of the codes the recall names.
 `differs`  both sides are legible and no code is common - positive evidence
-           that THIS jar is not the recalled jar. That is the fix to v1's
-           flaw 2 and it survives the formatting fix: normalising away spaces
+           that THIS jar is not the recalled jar. This survives formatting:
+           normalising away spaces
            and dashes never turns a different batch into a match.
 `unknown`  one side names no code at all. Absence of evidence, so POSSIBLE -
            a human compares the printed code by hand."""

@@ -178,7 +178,7 @@ for v, n in sorted(verdicts.items()):
 past = [r for r in ok if (r.get("days_past_code") or 0) > 0]
 disc = [r for r in past if r["verdict"] == "discard"]
 print("\n  past their printed date : %d" % len(past))
-print("  of those, discarded     : %d   <- v1 would have discarded all %d" % (len(disc), len(past)))
+print("  of those, discarded     : %d   <- date-only routing would discard all %d" % (len(disc), len(past)))
 
 flagged = [r for r in ok if r.get("recall_matches", 0) > 0]
 print("  carrying a recall flag  : %d" % len(flagged))

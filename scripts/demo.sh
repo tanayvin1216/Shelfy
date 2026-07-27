@@ -222,9 +222,9 @@ if r["verdict"] != "review":
 '
 SCANNED_ID=$(cat /tmp/bs_scanned_id)
 echo
-echo "  >> THE v1 FIX: that can is past its best-by date and it was NOT discarded."
-echo "     Date labels are quality indicators, not safety dates. v1 of this project"
-echo "     threw this can away. v2 routes it to REVIEW with the published shelf-life"
+echo "  >> THE DATE-LABEL FIX: that can is past its best-by date and was NOT discarded."
+echo "     Date labels are quality indicators, not safety dates. Backshelf routes it"
+echo "     to REVIEW with the published shelf-life"
 echo "     window and lets a human decide."
 
 if [ "$(cat /tmp/bs_llm_mode)" = "mock" ]; then
@@ -281,7 +281,7 @@ for x in r["pull_from_shelf"]:
     print("        matched on  : %s" % x["matched_fields"])
     print("        action      : %s" % x["action"])
 print()
-print("  === INFORMATIONAL ONLY - brand matched, lot did not. v1 condemned these ===")
+print("  === INFORMATIONAL ONLY - brand matched, lot did not. Item stays available ===")
 for x in r["informational"]:
     print("   [%s] %s %s  lot=%s" % (x["confidence"], x["brand"], x["product"], x["lot_code"] or "(unreadable)"))
     print("        %s" % x["action"])

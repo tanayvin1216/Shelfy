@@ -118,13 +118,17 @@ def:pub app -> JsxElement {
     # Unpacked once here rather than null-guarded at six points in the markup.
     # `llmState` is None only for the instant between first paint and the mount
     # effect landing, and "checking" is the honest word for that instant.
-    llmLive: bool = llmState is not None and not llmState.using_mock_llm;
+    llmFailed: bool = llmState is not None and llmState.last_error != "";
+    llmLive: bool = (
+        llmState is not None
+        and not llmState.using_mock_llm
+        and not llmFailed
+    );
     llmShade: str = OK if llmLive else HOLD;
     llmSource: str = llmState.source if llmState is not None else "checking";
     llmMasked: str = llmState.masked_key if llmState is not None else "";
     llmModel: str = llmState.model if llmState is not None else "";
     llmStamp: str = llmState.updated_at if llmState is not None else "";
-    llmError: str = llmState.last_error if llmState is not None else "";
 
     return <div
         style={{
@@ -226,12 +230,16 @@ def:pub app -> JsxElement {
                                 "fontWeight": "700",
                                 "color": llmShade
                             }}>
-                                {"GEMINI" if llmLive else "MOCKLLM"}
+                                {"GEMINI" if llmLive else ("DEMO MODE" if llmFailed else "MOCKLLM")}
                             </div>
                             <p style={{"margin": "0.4rem 0 0", "fontSize": "0.82rem", "lineHeight": "1.4"}}>
                                 {llmModel + " reads the photo you attach."
                                  if llmLive
-                                 else "No key on file, so every photo comes back as the same canned label - DEL MONTE Cut Green Beans. Every other path is real."}
+                                 else (
+                                     "This scan used the built-in demo label. Save the Gemini key and scan again."
+                                     if llmFailed
+                                     else "No key on file, so scans use the built-in demo label. Every other path is real."
+                                 )}
                             </p>
                             {if llmMasked != "" {
                                 <p style={{"margin": "0.4rem 0 0", "fontFamily": MONO, "fontSize": "0.66rem", "color": MUTED}}>
@@ -256,20 +264,6 @@ def:pub app -> JsxElement {
                             </p>
                         }}
 
-                        {if llmError != "" {
-                            <p style={{
-                                "margin": "0.5rem 0 0",
-                                "borderLeft": "3px solid " + ALARM,
-                                "paddingLeft": "0.6rem",
-                                "fontFamily": MONO,
-                                "fontSize": "0.64rem",
-                                "color": ALARM,
-                                "lineHeight": "1.45",
-                                "wordBreak": "break-word"
-                            }}>
-                                {"last model error - answered from MockLLM instead so nothing broke: " + llmError}
-                            </p>
-                        }}
                     </div>
 
                     <p style={{"fontFamily": MONO, "fontSize": "0.68rem", "color": MUTED, "marginTop": "1.3rem", "borderLeft": "3px solid " + RULE, "paddingLeft": "0.65rem", "lineHeight": "1.45"}}>
@@ -341,14 +335,14 @@ def:pub app -> JsxElement {
                                       headline={str(intake.days_past_code) + " days past the date - and still food."}>
                                     <div style={{"display": "flex", "flexWrap": "wrap", "gap": "0.9rem", "margin": "0 0 0.7rem"}}>
                                         <div style={{"flex": "1 1 12rem", "borderTop": "2px solid " + ALARM, "paddingTop": "0.35rem"}}>
-                                            <span style={lbl(ALARM, "0.15rem")}>Shelfy v1 would have said</span>
+                                            <span style={lbl(ALARM, "0.15rem")}>date-only workflow</span>
                                             <div style={{"fontFamily": MONO, "fontSize": "1.25rem", "color": ALARM, "letterSpacing": "0.04em"}}>DISCARD</div>
                                             <p style={{"margin": "0.2rem 0 0", "fontSize": "0.82rem", "color": MUTED}}>
-                                                v1 routed anything past its date to the bin.
+                                                A date-only rule sends anything past its date to the bin.
                                             </p>
                                         </div>
                                         <div style={{"flex": "1 1 12rem", "borderTop": "2px solid " + HOLD, "paddingTop": "0.35rem"}}>
-                                            <span style={lbl(HOLD, "0.15rem")}>Backshelf v2 says</span>
+                                            <span style={lbl(HOLD, "0.15rem")}>Backshelf says</span>
                                             <div style={{"fontFamily": MONO, "fontSize": "1.25rem", "color": HOLD, "letterSpacing": "0.04em"}}>REVIEW</div>
                                             <p style={{"margin": "0.2rem 0 0", "fontSize": "0.82rem", "color": MUTED}}>
                                                 {"published window for " + intake.item.category + ": "
@@ -358,8 +352,8 @@ def:pub app -> JsxElement {
                                     </div>
                                     <p style={{"margin": "0", "maxWidth": "64ch", "fontSize": "0.88rem"}}>
                                         Outside infant formula and baby food, date labels are not federally
-                                        regulated and are not safety dates. v1 destroyed edible food at
-                                        organisations that never have enough of it.
+                                        regulated and are not safety dates. Discarding on date alone
+                                        destroys edible food at organisations that never have enough of it.
                                     </p>
                                 </Beat>
                             }}
@@ -565,8 +559,8 @@ def:pub app -> JsxElement {
                                 <div style={{"marginTop": "1.8rem"}}>
                                     <span style={lbl(INK, "0.3rem")}>Brand match only - these stay on the shelf</span>
                                     <p style={{"margin": "0 0 0.5rem", "maxWidth": "64ch", "fontSize": "0.88rem"}}>
-                                        Recalls are lot-specific. v1 matched on brand alone and would have
-                                        pulled every one of these. Section 4 forbids it: the codes go
+                                        Recalls are lot-specific. Brand-only matching would pull every
+                                        one of these. Section 4 forbids it: the codes go
                                         side by side and a human decides.
                                     </p>
                                     {for (i, row) in enumerate(swept.informational) {

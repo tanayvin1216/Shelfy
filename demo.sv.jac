@@ -16,7 +16,7 @@ Chocolate Raisins, `Lot: 260562 BB: 022527`):
     lot 260562   on the shelf, handed to pickup codes 4471 and 8830
                  -> CONFIRMED once the sweep runs. Both households get named.
     lot 991234   same brand and product, legible, NOT in the recall
-                 -> WEAK. Informational. This is the fix to v1's Flaw 2.
+                 -> WEAK. Informational. Brand-only matching is avoided.
     lot (none)   smudged, handed to 2210
                  -> POSSIBLE. Review, surface the codes, notify the household.
     green beans  no flag at all - the sweep is not just flagging everything.

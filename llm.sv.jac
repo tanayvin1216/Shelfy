@@ -5,8 +5,8 @@ There is not one prompt string in this file, and there must never be one: the
 §4 domain rules ARE the semstrings, so the rules travel with the type system
 instead of with a hand-rolled f-string somewhere in a walker.
 
-The §4 shelf-life table is carried by `sem shelf_life_verdict` below. That
-annotation is the fix to Flaw 1 (v1 discarded past-date shelf-stable food).
+The §4 shelf-life table is carried by `sem shelf_life_verdict` below. It keeps
+past-date shelf-stable food in human review instead of discarding on date alone.
 
 Model selection is explicit and re-resolved on every call - see `LlmRouter`:
     key stored in the graph -> real Gemini, effective on the NEXT call
@@ -451,7 +451,7 @@ impl DemoLLM.dispatch_no_streaming(mt_run: MTRuntime) -> CompletionResult {
 """A DemoLLM stocked with one plausible answer per return type.
 
 The default LabelRead is the §11 demo item: a can of green beans well past a
-'best by' date, which v1 would have thrown away and v2 routes to review.
+'best by' date, which Backshelf routes to human review.
 """
 def _demo_llm -> DemoLLM {
     return DemoLLM(
