@@ -15,8 +15,9 @@
 # Every step below is one `POST /walker/<Name>`. There is no other API: the
 # walkers ARE the endpoints, generated from the walker declarations.
 #
-# The Gemini key, if you have one, goes in .env at the repo root and nowhere
-# else. `jac start` picks it up on its own. See .env.example.
+# The easiest Gemini setup is the byLLM panel in the running app: paste a key
+# and the next call uses it without a restart. `.env` remains available for a
+# local machine you control. See README.md.
 #
 set -uo pipefail
 
@@ -228,9 +229,9 @@ echo "     window and lets a human decide."
 
 if [ "$(cat /tmp/bs_llm_mode)" = "mock" ]; then
   echo
-  dim "  [LLM: MockLLM fallback - no GEMINI_API_KEY. Every code path runs, but the"
-  dim "   label read is canned and does not depend on the photo. Put a key in .env"
-  dim "   at the repo root and restart to read real labels.]"
+  dim "  [LLM: MockLLM fallback - no Gemini key. Every code path runs, but the"
+  dim "   label read is canned and does not depend on the photo. Paste a key into"
+  dim "   the app's byLLM panel to make the next scan read a real label.]"
 else
   dim "  [LLM: Gemini via byLLM - this is a real read of the photo you passed.]"
 fi
@@ -344,5 +345,5 @@ echo "  Nothing about any label changed between step 5 and here. The graph chang
 rule
 bold "Done. The client at $BASE/ drives these same six walkers."
 if [ "$(cat /tmp/bs_llm_mode 2>/dev/null)" = "mock" ]; then
-  echo "Ran on the MockLLM fallback. Put a Gemini key in .env at the repo root to use real extraction."
+  echo "Ran on MockLLM. Paste a Gemini key into the app's byLLM panel for real extraction."
 fi

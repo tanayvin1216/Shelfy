@@ -220,8 +220,8 @@ if mock:
   What this run DID prove: %d photos went end to end through IntakeScan, the
   §4 routing rules fired, and %d recall comparison(s) ran against the graph.
 
-  To measure extraction for real: put a Gemini key in .env at the repo root
-  (see .env.example), restart the server, and run this script again.""" % (len(ok), sum(r.get("recall_matches", 0) for r in ok)))
+  To measure extraction for real: paste a Gemini key into the running app's
+  byLLM panel, then run this script again. No restart is needed.""" % (len(ok), sum(r.get("recall_matches", 0) for r in ok)))
 elif not truth_path:
     print("ACCURACY: NOT MEASURED (no truth file)")
     print("=" * W)

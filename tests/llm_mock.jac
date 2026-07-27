@@ -14,6 +14,7 @@ Runs with no API key. Its job is to prove two things that `jac check` cannot:
 """
 
 import from llm {
+    DEFAULT_MODEL_NAME,
     DateType,
     ItemForClient,
     LabelRead,
@@ -25,7 +26,8 @@ import from llm {
     explain_for_client,
     llm,
     resolve_constraints,
-    shelf_life_verdict
+    shelf_life_verdict,
+    _normalize_model_name
 }
 
 """The prompt text byLLM assembled for the most recent dispatch.

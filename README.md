@@ -2,18 +2,18 @@
 
 **A food pantry intake and recall-propagation system, built in Jac.**
 
-Roughly 60,000 food pantries in the US run on volunteers and clipboards. Donations
-arrive unsorted, unbarcoded and undated. A grocery shopper gets recall alerts and
-clear labels for free; a family picking up food from a pantry shelf gets neither.
+**Roughly 60,000 US food pantries run on volunteers and clipboards, while donations
+arrive unsorted, unbarcoded, and undated. A recall announced on Tuesday can affect
+the can a family took home on Saturday—the Tuesday-recall/Saturday-can gap that
+ordinary shelf notices cannot close. Backshelf is the first system that traces a new
+FDA recall backward from a specific item to the pickup-coded households that received
+it, without storing their names, addresses, or phone numbers.**
 
-**The gap this targets:** a recall announced on Tuesday affects the can that went out
-the door on Saturday. Food banks brief volunteers and post notices, which protects
-food still in the building. Nobody can tell a *specific household* that the jar in
-their cupboard is now recalled — because nobody keeps a graph connecting recalls to
-items to the households that received them.
+![RecallSweep terminal output: recalled products are pulled from shelves and pickup-coded households are identified by walking the graph backward](assets/recall-sweep-demo.png)
 
-Backshelf keeps that graph. `RecallSweep` walks it **backwards**, from a new FDA recall
-to the pickup codes of the households that took the item home.
+*Real `RecallSweep` output from `./scripts/demo.sh --serve`; the repeated notification
+prose is omitted so the pull list, redacted pickup codes, and backward traversal stay
+readable.*
 
 ---
 
@@ -206,7 +206,7 @@ reason this project is written in Jac.
 | `shelf_life_verdict` | `llm.sv.jac:198–278` | the §4 shelf-life table lives in `sem` at `205–278`; this is the fix to Flaw 1 |
 | `explain_for_client` | `llm.sv.jac:309–356` | plain language, any language, "the label lists" framing |
 | `resolve_constraints` | `llm.sv.jac:362–392` | free text → allergen tag names |
-| Model switch | `llm.sv.jac:480–491` | Gemini ⇄ MockLLM on one env var |
+| Model switch | `llm.sv.jac:496–718` | stored key → env key → MockLLM, resolved on every call |
 | Recall tiering | `sweep.sv.jac:570–612` | `_classify` — the single source of the CONFIRMED/POSSIBLE/WEAK decision |
 | Lot-code parsing | `sweep.sv.jac:426–467` | `_lot_candidates`, which is what makes matching lot-aware instead of brand-only |
 
@@ -232,6 +232,18 @@ One command replays the whole four-minute demo against a live server:
 ```bash
 ./scripts/demo.sh --reset
 ```
+
+For the final stage check, use the one-command presentation path:
+
+```bash
+./scripts/present.sh          # Railway preflight, then clean local reset last
+./scripts/present.sh --open   # also opens the live app and RecallSweep source
+```
+
+`present.sh` refuses to continue if Railway is unreachable, a required walker is
+missing, Gemini is still on MockLLM, the retired Gemini 2.0 model is configured, or
+the last real model call failed. Only after those checks pass does it run
+`demo.sh --reset`, so the destructive clean reset remains the final operation.
 
 `--reset` wipes `.jac/data/main.db*`, starts `jac start main.jac` on port 8390,
 waits for walker registration and then walks every beat in order: seed → scan →

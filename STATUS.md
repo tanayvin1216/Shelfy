@@ -32,7 +32,12 @@ and known rough edges; read `README.md` for how to run it.
 
 ## The Gemini key — settled, verified by execution
 
-**One place: `.env` at the repo root. One command: `jac start main.jac`.** No export.
+**Default model: `gemini/gemini-2.5-flash`.** Gemini 2.0 Flash was shut down on
+2026-06-01. The resolver also migrates either retired 2.0 spelling if one is
+still persisted in the graph or in `BACKSHELF_MODEL`, so an old deployment
+cannot silently keep selecting the dead model after the source upgrade.
+
+**Local fallback: `.env` at the repo root. One command: `jac start main.jac`.** No export.
 
 `jac start` reads `.env` by itself. byLLM imports litellm; litellm calls `load_dotenv()`
 at import; that search walks up from `.venv/lib/python3.13/site-packages/litellm` and
@@ -49,8 +54,8 @@ Proven both directions:
 > **Superseded — the key now goes in the running app.** The byLLM panel in the left
 > rail saves it onto an `LlmConfig` node, and it takes effect on the next call with no
 > restart. The env var above still works and is checked second. Resolution is
-> graph → env → mock, in `_resolve_llm` at `llm.sv.jac:536`, cached behind a sha256
-> fingerprint of the key. The router is `LlmRouter` at `llm.sv.jac:566`.
+> graph → env → mock, in `_resolve_llm` at `llm.sv.jac:628`, cached behind a sha256
+> fingerprint of the key. The router is `LlmRouter` at `llm.sv.jac:649`.
 >
 > This matters on Railway, where `.env` never worked: the Dockerfile puts the venv at
 > `/opt/venv` and the code at `/app`, so litellm's `load_dotenv()` walk-up never reaches
@@ -116,6 +121,8 @@ descriptor survives.
 | Script | Does |
 |---|---|
 | `scripts/setup.sh` | venv + deps + npm from scratch |
+| `scripts/preflight.sh` | read-only Railway/API/model readiness check |
+| `scripts/present.sh` | preflight first, then the clean reset last |
 | `scripts/demo.sh --reset` | wipe graph, start server, replay all of §12 (~10s) |
 | `scripts/demo.sh` | replay against a running server (~2s), idempotent |
 | `scripts/eval.sh <dir>` | real-photo eval through `IntakeScan` |
@@ -125,17 +132,17 @@ SQLite, so that file **is** the database.
 
 ## Known rough edges
 
-- **Everything currently runs on MockLLM.** There is no Gemini key on this machine.
-  Every code path is exercised, but `extract_label` returns the same canned label for
-  any photo, so the demo's scanned can is always DEL MONTE Cut Green Beans and every
-  client explanation is the same sentence. This is the single biggest gap between what
-  is demoed and what the product does. Adding the key fixes it with no code change.
+- **This local clone has no Gemini key.** Local scans therefore return the canned
+  DEL MONTE label until a key is pasted into the running app. The deployed surface
+  should be checked with `./scripts/preflight.sh`; it fails loudly on MockLLM, a
+  retired model, or a provider error before the final demo reset can run.
 - `scripts/eval.sh` has never been run against real photographs, because that requires
   the key. Its MockLLM path is tested (4 photos, end to end) and its accuracy path is
   tested against synthetic reads plus a truth CSV. What is untested is Gemini's actual
   extraction quality — that number does not exist yet and the script deliberately
   refuses to invent one.
-- `assets/` is empty. The §10 eval needs 20–30 photos of real labels taken at the venue.
+- `assets/` contains the README demo screenshot, but no evaluation photos yet. The
+  §10 eval still needs 20–30 real labels taken at the venue.
 - Re-running `demo.sh` without `--reset` accumulates scanned cans, so the shelf listings
   in steps 5 and 8 grow. Correct behaviour, noisy on stage. Use `--reset`.
 - A graph left over from an earlier schema iteration can produce a sweep that flags

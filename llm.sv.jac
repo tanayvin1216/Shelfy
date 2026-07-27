@@ -493,8 +493,23 @@ def _demo_llm -> DemoLLM {
     );
 }
 
-glob DEFAULT_MODEL_NAME: str = "gemini/gemini-2.0-flash";
+glob DEFAULT_MODEL_NAME: str = "gemini/gemini-2.5-flash";
 glob _demo_cache: DemoLLM | None = None;
+
+"""Resolve a configured model name and migrate the Gemini 2.0 default that
+Google shut down on 2026-06-01.
+
+The explicit aliases matter for a deployed demo: an old value can survive in
+the persisted graph or in BACKSHELF_MODEL even after this source changes.
+Treating those two retired spellings as the default makes the upgrade take
+effect on the next call, with no graph edit or Railway variable cleanup."""
+def _normalize_model_name(requested: str) -> str {
+    named = requested.strip();
+    if named == "" or named == "gemini/gemini-2.0-flash" or named == "gemini-2.0-flash" {
+        return DEFAULT_MODEL_NAME;
+    }
+    return named;
+}
 
 """One DemoLLM per process. Identity matters: tests and the demo seeder push
 scripted answers onto `llm.queue`, so clearing the key and landing back on the
@@ -512,7 +527,9 @@ def _select_model -> BaseLLM {
     api_key = os.getenv("GEMINI_API_KEY", "").strip();
     if api_key != "" {
         return Model(
-            model_name=os.getenv("BACKSHELF_MODEL", DEFAULT_MODEL_NAME),
+            model_name=_normalize_model_name(
+                os.getenv("BACKSHELF_MODEL", DEFAULT_MODEL_NAME)
+            ),
             api_key=api_key
         );
     }
@@ -575,10 +592,9 @@ never writes a node."""
 def _desired_key -> KeyChoice {
     cfg = _find_llm_config();
     if cfg is not None and cfg.api_key.strip() != "" {
-        named = cfg.model_name.strip();
         return KeyChoice(
             api_key=cfg.api_key.strip(),
-            model_name=(named if named != "" else DEFAULT_MODEL_NAME),
+            model_name=_normalize_model_name(cfg.model_name),
             source="graph"
         );
     }
@@ -586,7 +602,9 @@ def _desired_key -> KeyChoice {
     if env_key != "" {
         return KeyChoice(
             api_key=env_key,
-            model_name=os.getenv("BACKSHELF_MODEL", DEFAULT_MODEL_NAME),
+            model_name=_normalize_model_name(
+                os.getenv("BACKSHELF_MODEL", DEFAULT_MODEL_NAME)
+            ),
             source="env"
         );
     }

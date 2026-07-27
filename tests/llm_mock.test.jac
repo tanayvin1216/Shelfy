@@ -17,6 +17,14 @@ test "no GEMINI_API_KEY means the app still runs on MockLLM" {
     assert isinstance(llm, MockLLM), f"expected a MockLLM fallback, got {type(llm).__name__}";
 }
 
+test "retired Gemini 2.0 model names migrate to the stable default" {
+    assert DEFAULT_MODEL_NAME == "gemini/gemini-2.5-flash";
+    assert _normalize_model_name("") == DEFAULT_MODEL_NAME;
+    assert _normalize_model_name("gemini/gemini-2.0-flash") == DEFAULT_MODEL_NAME;
+    assert _normalize_model_name("gemini-2.0-flash") == DEFAULT_MODEL_NAME;
+    assert _normalize_model_name("gemini/gemini-3.6-flash") == "gemini/gemini-3.6-flash";
+}
+
 test "extract_label returns a fully populated LabelRead" {
     read = extract_label(image_from_source("docs/spikes/byllm/label.png"), "canned vegetable");
     assert isinstance(read, LabelRead);
