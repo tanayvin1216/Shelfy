@@ -222,7 +222,7 @@ if r["verdict"] != "review":
 '
 SCANNED_ID=$(cat /tmp/bs_scanned_id)
 echo
-echo "  >> THE DATE-LABEL FIX: that can is past its best-by date and was NOT discarded."
+echo "  >> DATE-AWARE ROUTING: that can is past its best-by date and was NOT discarded."
 echo "     Date labels are quality indicators, not safety dates. Backshelf routes it"
 echo "     to REVIEW with the published shelf-life"
 echo "     window and lets a human decide."

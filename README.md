@@ -300,20 +300,15 @@ without ground truth would be guessing, so it refuses to.
 
 ---
 
-## Why this design
+## What Backshelf does
 
-Backshelf addresses three common failure modes in pantry recall workflows:
-
-1. **"expired → discard" was backwards.** Date labels are not federally regulated and
-   are not safety dates. Backshelf routes past-date shelf-stable goods to REVIEW with shelf-life
-   guidance, never to discard.
-2. **Brand-only recall matching.** Recalls are lot- and date-code specific; matching on
-   brand alone flags every jar of a brand in the building. Backshelf is lot-aware with explicit
-   CONFIRMED / POSSIBLE / WEAK confidence tiers, and never auto-discards below CONFIRMED.
-3. **Intake-time checking only.** That protects nothing already distributed, which is
-   where the real harm is. `RecallSweep` adds retroactive tracing.
-
-Fixing those three is the core of the project.
+1. **Label-aware intake.** It extracts the package label, applies pantry shelf-life
+   guidance, identifies listed allergens, and routes ambiguous items to human review.
+2. **Lot-aware recall matching.** It compares brand, product, and printed lot/date
+   codes with explicit CONFIRMED / POSSIBLE / WEAK confidence tiers.
+3. **Retroactive tracing.** `RecallSweep` moves backward through distribution history
+   to identify pickup-coded households, while `ClearItem` prevents confirmed recalled
+   items from returning to the shelf.
 
 ---
 

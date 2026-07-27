@@ -274,11 +274,12 @@ def:pub app -> JsxElement {
                 <main style={{"flex": "999 1 26rem", "minWidth": "0"}}>
 
                     {if seeded is None and intake is None and swept is None {
-                        <Panel title="Start here" meta="nothing has run yet">
+                        <Panel title="Backshelf demo" meta="six walkers / one connected graph">
                             <p style={{"margin": "0", "maxWidth": "60ch"}}>
-                                Press <strong>1</strong> to build the pantry graph and a Saturday's
-                                worth of handout history, then work down the rail. Step 5 is the one
-                                no existing pantry system can do.
+                                Work down the rail to scan a label, apply pantry date and allergen
+                                rules, search the shelf in a client's language, synchronize recalls,
+                                trace affected items back to pickup-coded households, and enforce the
+                                recall block. Press <strong>1</strong> to prepare the graph.
                             </p>
                         </Panel>
                     }}
@@ -286,8 +287,9 @@ def:pub app -> JsxElement {
                     {if seeded is not None {
                         <Panel title="Graph" meta={"pantry " + seeded.pantry_name}>
                             <p style={{"margin": "0 0 0.4rem"}}>
-                                {"nodes created this run: " + str(seeded.nodes_created)
-                                 + (" - the seed walkers are idempotent, so a second press changes nothing" if seeded.already_seeded else "")}
+                                {"Graph ready - existing demo data reused."
+                                 if seeded.already_seeded
+                                 else "Graph ready - " + str(seeded.nodes_created) + " pantry nodes created."}
                             </p>
                             <p style={{"fontFamily": MONO, "fontSize": "0.72rem", "color": MUTED, "margin": "0"}}>
                                 {"shelves: " + commas(seeded.shelves)}
@@ -299,7 +301,7 @@ def:pub app -> JsxElement {
                                 <p style={{"margin": "0.7rem 0 0"}}>
                                     {"distribution history: " + str(len(demo.handouts))
                                      + " handouts to pickup codes " + commas(demo.households)
-                                     + ". No recall flags exist yet."}
+                                     + ". RecallSweep traces matching items back to these recipients."}
                                 </p>
                             }}
                         </Panel>
@@ -331,7 +333,7 @@ def:pub app -> JsxElement {
 
                             {if intake.days_past_code > 0 and intake.verdict != "discard" {
                                 <Beat tone="hold"
-                                      kicker="the mistake this rebuild exists to fix"
+                                      kicker="date-aware pantry routing"
                                       headline={str(intake.days_past_code) + " days past the date - and still food."}>
                                     <div style={{"display": "flex", "flexWrap": "wrap", "gap": "0.9rem", "margin": "0 0 0.7rem"}}>
                                         <div style={{"flex": "1 1 12rem", "borderTop": "2px solid " + ALARM, "paddingTop": "0.35rem"}}>

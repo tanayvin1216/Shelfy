@@ -3,7 +3,7 @@
 Both walkers are the API. `jac start` turns them into `POST /walker/IntakeScan`
 and `POST /walker/ClearItem`; there is no hand-written route anywhere.
 
-The two spec flaws this module exists to fix:
+This module enforces two core pantry rules:
 
   Date-only discard. `shelf_life_verdict` carries the sec-4
   shelf-life table in its semstring, and `_discard_allowed` below is the
@@ -478,7 +478,7 @@ def _tag_allergens(ingredients_text: str) -> list[AllergenHit] {
 }
 
 # ---------------------------------------------------------------------------
-# Recall matching - the fix to Flaw 2
+# Recall matching - brand, product, and lot-aware
 # ---------------------------------------------------------------------------
 
 """Volunteer-facing wording for a tier the shared grader already decided.
@@ -545,7 +545,7 @@ def _classify_recall(item: Item, record: RecallRecord) -> RecallMatch | None {
 }
 
 # ---------------------------------------------------------------------------
-# Verdict guards - the fix to Flaw 1, enforced in code and not only in a prompt
+# Verdict guards - enforced in code and not only in a prompt
 # ---------------------------------------------------------------------------
 
 """Cut a packaging note into clauses so a negation cannot leak across one."""

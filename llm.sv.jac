@@ -183,7 +183,7 @@ def image_from_source(src: str) -> Image {
 }
 
 # ---------------------------------------------------------------------------
-# 2. shelf_life_verdict  -- this is where the fix to Flaw 1 lives
+# 2. shelf_life_verdict  -- pantry shelf-life routing
 # ---------------------------------------------------------------------------
 
 obj ShelfLifeCall {
