@@ -89,30 +89,37 @@ traversal in miniature and is the best single file to read first.
 
 ---
 
-## The Gemini key — one place, one command
+## The Gemini key — paste it into the running app
 
-The key goes in **`.env` at the repo root** and nowhere else.
+Open the app, put the key in the **byLLM panel** in the left rail, and press save. It
+takes effect on the next call — no restart, no redeploy, no shell. Press clear to go
+back to MockLLM.
 
-```bash
-cp .env.example .env        # paste the key on the GEMINI_API_KEY= line
-./.venv/bin/jac start main.jac
-```
+That works on the deployed URL too, which is the point: nothing about supplying a key
+requires access to the host.
 
-That is the whole procedure. No `export`, no second file, no flag. `jac start` reads
-`.env` on its own: byLLM imports litellm, litellm calls `load_dotenv()` at import
-time, and that search walks up from `.venv/lib/.../site-packages/litellm` to the repo
-root and finds it.
+Two other sources still work, in this resolution order:
 
-Verified by execution, both directions: with only `.env` on disk and `GEMINI_API_KEY`
-absent from the shell, `IntakeScan` reached `generativelanguage.googleapis.com`.
-Deleting `.env` put the same call back on the fallback with `using_mock_llm: true`.
+| Order | Source | Notes |
+|---|---|---|
+| 1 | key saved in the app | stored on an `LlmConfig` node, survives restarts |
+| 2 | `GEMINI_API_KEY` env var | `.env` locally, a service variable on Railway |
+| 3 | neither | `DemoLLM`, a MockLLM returning canned structured output |
 
-The switch is `_select_model` at `llm.sv.jac:480–491` and reads exactly one variable:
+The router is `LlmRouter` at `llm.sv.jac:566`; resolution is `_resolve_llm` at
+`llm.sv.jac:536`, cached behind a sha256 fingerprint of the key so a saved key
+invalidates the cache without the raw value ever being compared or logged.
 
-- **`GEMINI_API_KEY` set** → real Gemini through byLLM, real label extraction from photos
-- **`GEMINI_API_KEY` unset** → `DemoLLM`, a MockLLM subclass returning canned structured output
+**A bad key degrades to MockLLM rather than failing the scan.** A walker never 500s
+because the key is wrong — the error is redacted and surfaced as `last_error` on
+`LlmStatus`. That means `using_mock_llm: false` can coexist with a mock-sourced
+answer; `last_error` is the signal to check.
 
-The model is chosen once, at import. **Restart the server after adding the key.**
+> **Security note.** The walker that sets the key is `:pub` like everything else here,
+> so anyone who can reach the URL can set or clear it. That is an accepted tradeoff for
+> a demo deployment, not an oversight. The key is never returned, logged, or written to
+> disk — only a masked `AIza...tail` form. Put the walker behind auth before this is
+> anything but a demo.
 
 MockLLM proves every code path executes, but the label read is not real — it returns
 fixed values regardless of the photo, which is why `scripts/eval.sh` refuses to print

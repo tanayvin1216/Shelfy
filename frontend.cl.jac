@@ -14,7 +14,7 @@ Handlers live in `frontend.impl.jac`.
 """
 
 import from .components.Panel {
-    Panel, Beat, CodeCompare, Stat, Tag, Field, Choice, Action
+    Panel, Beat, CodeCompare, Stat, Tag, Field, Choice, Action, SmallButton
 }
 
 # Design tokens. A `glob` in a `.cl.jac` is a module-local JS variable and is
@@ -45,6 +45,7 @@ sv import from demo { SeedDemo, DemoReport }
 sv import from intake { IntakeScan, ClearItem, IntakeReport, ClearReport }
 sv import from client_search { MatchNeeds, MatchReport }
 sv import from sweep { RecallSweep, SweepReport }
+sv import from settings { LlmStatus, SetLlmKey, LlmStatusView }
 
 """The one small-caps monospace marker used for every section label."""
 def lbl(color: str, gap: str) -> dict[str, object] {
@@ -90,8 +91,20 @@ def:pub app -> JsxElement {
         pickup: str = "8830",
         constraints: str = "allergic to peanuts, diabetic",
         language: str = "English",
-        useLiveFeed: bool = False;
+        useLiveFeed: bool = False,
+        apiKey: str = "",
+        llmState: LlmStatusView | None = None,
+        llmNote: str = "";
 
+    """Ask the server what it is running on before the volunteer touches
+    anything - the mock/Gemini banner has to be right on first paint, not after
+    the first scan."""
+    async can with entry {
+        llmState = (root spawn LlmStatus()).reports[0];
+    }
+
+    async def runSaveKey -> None;
+    async def runClearKey -> None;
     async def runSeed -> None;
     async def runScan -> None;
     async def runClearLast -> None;
@@ -101,6 +114,17 @@ def:pub app -> JsxElement {
     def toggleFeed(e: MouseEvent) -> None;
     def pickLanguage(choice: str) -> None;
     def onPhoto(e: ChangeEvent) -> None;
+
+    # Unpacked once here rather than null-guarded at six points in the markup.
+    # `llmState` is None only for the instant between first paint and the mount
+    # effect landing, and "checking" is the honest word for that instant.
+    llmLive: bool = llmState is not None and not llmState.using_mock_llm;
+    llmShade: str = OK if llmLive else HOLD;
+    llmSource: str = llmState.source if llmState is not None else "checking";
+    llmMasked: str = llmState.masked_key if llmState is not None else "";
+    llmModel: str = llmState.model if llmState is not None else "";
+    llmStamp: str = llmState.updated_at if llmState is not None else "";
+    llmError: str = llmState.last_error if llmState is not None else "";
 
     return <div
         style={{
@@ -167,6 +191,85 @@ def:pub app -> JsxElement {
                             }}>
                             {"recall source: live openFDA" if useLiveFeed else "recall source: cached snapshot"}
                         </button>
+                    </div>
+
+                    {#*
+                       The model switch. A judge or a volunteer can paste a
+                       Gemini key here and the very next scan uses it - the key
+                       goes onto a node in the graph, not into a file, and the
+                       byLLM router re-reads it per call. Blank + SAVE, or
+                       CLEAR, puts it straight back on MockLLM.
+
+                       The banner is loud on purpose: under MockLLM every scan
+                       returns the same canned can of green beans, and anyone
+                       watching a demo deserves to know that from the screen
+                       rather than from a footnote.
+                    *#}
+                    <div style={{"marginTop": "1.5rem", "paddingTop": "0.9rem", "borderTop": "2px solid " + INK}}>
+                        <span style={lbl(MUTED, "0.5rem")}>{"byLLM - source: " + llmSource}</span>
+
+                        <div style={{
+                            "borderLeft": "6px solid " + llmShade,
+                            "borderTop": "1px solid " + RULE,
+                            "borderRight": "1px solid " + RULE,
+                            "borderBottom": "1px solid " + RULE,
+                            "background": CARD,
+                            "padding": "0.6rem 0.8rem 0.7rem",
+                            "marginBottom": "0.9rem"
+                        }}>
+                            <span style={lbl(llmShade, "0.15rem")}>every scan is read by</span>
+                            <div style={{
+                                "fontFamily": MONO,
+                                "fontSize": "1.55rem",
+                                "lineHeight": "1",
+                                "letterSpacing": "0.03em",
+                                "fontWeight": "700",
+                                "color": llmShade
+                            }}>
+                                {"GEMINI" if llmLive else "MOCKLLM"}
+                            </div>
+                            <p style={{"margin": "0.4rem 0 0", "fontSize": "0.82rem", "lineHeight": "1.4"}}>
+                                {llmModel + " reads the photo you attach."
+                                 if llmLive
+                                 else "No key on file, so every photo comes back as the same canned label - DEL MONTE Cut Green Beans. Every other path is real."}
+                            </p>
+                            {if llmMasked != "" {
+                                <p style={{"margin": "0.4rem 0 0", "fontFamily": MONO, "fontSize": "0.66rem", "color": MUTED}}>
+                                    {"key on file " + llmMasked + " / saved " + llmStamp}
+                                </p>
+                            }}
+                        </div>
+
+                        <Field label="gemini api key - stored in the graph, never echoed back"
+                               value={apiKey} kind="password"
+                               placeholder={"AIza..." if llmMasked == "" else "paste a new key to replace " + llmMasked}
+                               onChange={lambda v: str { apiKey = v; }}/>
+
+                        <div style={{"display": "flex", "marginBottom": "0.6rem"}}>
+                            <SmallButton label="save key" onRun={runSaveKey} primary={True} busy={busy}/>
+                            <SmallButton label="clear" onRun={runClearKey} busy={busy}/>
+                        </div>
+
+                        {if llmNote != "" {
+                            <p style={{"margin": "0", "fontFamily": MONO, "fontSize": "0.66rem", "color": MUTED, "lineHeight": "1.45"}}>
+                                {llmNote}
+                            </p>
+                        }}
+
+                        {if llmError != "" {
+                            <p style={{
+                                "margin": "0.5rem 0 0",
+                                "borderLeft": "3px solid " + ALARM,
+                                "paddingLeft": "0.6rem",
+                                "fontFamily": MONO,
+                                "fontSize": "0.64rem",
+                                "color": ALARM,
+                                "lineHeight": "1.45",
+                                "wordBreak": "break-word"
+                            }}>
+                                {"last model error - answered from MockLLM instead so nothing broke: " + llmError}
+                            </p>
+                        }}
                     </div>
 
                     <p style={{"fontFamily": MONO, "fontSize": "0.68rem", "color": MUTED, "marginTop": "1.3rem", "borderLeft": "3px solid " + RULE, "paddingLeft": "0.65rem", "lineHeight": "1.45"}}>

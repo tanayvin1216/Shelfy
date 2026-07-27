@@ -10,6 +10,38 @@ is still the old value further down - reading `demo.confirmed_item_id` right
 after `demo = ...` throws on null.
 """
 
+"""Store the pasted key and read back what the server is now running on.
+
+Two spawns on purpose. `SetLlmKey` reports the write; `LlmStatus` is a separate
+read that proves the key took, and it is the same endpoint the mount effect
+uses, so the banner cannot drift from the panel. The input is blanked
+immediately - the key belongs on the node, not in a React state field that
+survives on the page.
+"""
+impl app.runSaveKey -> None {
+    busy = True;
+    status = "SetLlmKey ...";
+    saved = (root spawn SetLlmKey(api_key=apiKey)).reports[0];
+    apiKey = "";
+    llmState = (root spawn LlmStatus()).reports[0];
+    llmNote = saved.message;
+    status = "Model: " + ("MockLLM" if saved.using_mock_llm else "Gemini") + ".";
+    busy = False;
+}
+
+"""Blank key = clear. Same walker, no second endpoint and no delete verb: the
+server treats an empty key as the explicit revert to MockLLM."""
+impl app.runClearKey -> None {
+    busy = True;
+    status = "SetLlmKey with a blank key ...";
+    saved = (root spawn SetLlmKey(api_key="")).reports[0];
+    apiKey = "";
+    llmState = (root spawn LlmStatus()).reports[0];
+    llmNote = saved.message;
+    status = "Back on MockLLM.";
+    busy = False;
+}
+
 impl app.runSeed -> None {
     busy = True;
     status = "SeedPantry -> SeedDemo ...";
@@ -41,6 +73,12 @@ impl app.runScan -> None {
     )).reports[0];
     ended: float = _browser.Date.now() as float;  # jac:ignore[E1053]
     scanSecs = f"{(ended - started) / 1000.0:.1f}";
+    # Deliberately after the clock stops: this extra spawn must not inflate the
+    # under-ten-seconds number on screen. It is here so that a scan made with a
+    # bad key updates the model panel's error line instead of leaving the
+    # volunteer looking at a green GEMINI banner and a canned green-bean result
+    # with nothing explaining the gap.
+    llmState = (root spawn LlmStatus()).reports[0];
     intake = res;
     lastItemId = res.item.id;
     cleared = None;

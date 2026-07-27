@@ -78,6 +78,26 @@ node RecallFeed {
     has last_synced: str = "";
 }
 
+node LlmConfig {
+    """The Gemini key pasted into the running app, kept in the graph so it
+    survives a restart without a redeploy and without a shell.
+
+    Reachability from root IS the storage - the key is never written to a file,
+    to `.env`, or to anything git tracks. It is also never reported: every
+    walker that touches it returns `_mask_key(...)` instead (settings.sv.jac).
+
+    ACCEPTED EXPOSURE, deliberately: Backshelf is deployed publicly with `:pub`
+    walkers and no auth, so anyone who can reach the URL can set or clear this
+    key, and a set key spends the owner's Gemini quota. That is a hackathon
+    demo tradeoff - a judge has to be able to paste a key on their own phone,
+    and the alternative is an auth system there was no day to build. It is a
+    decision, not an oversight. Do not deploy this shape with a funded key.
+    """
+    has api_key: str = "",
+        model_name: str = "",
+        updated_at: str = "";
+}
+
 node RecallRecord {
     has recall_number: str,
         recalling_firm: str = "",
@@ -292,6 +312,30 @@ def _get_recall_feed() -> RecallFeed {
         return f;
     }
     return (p ++> RecallFeed(last_synced=""))[0] as RecallFeed;
+}
+
+"""Read-only lookup, and it must stay read-only: the byLLM model resolver in
+`llm.sv.jac` calls this on every LLM call, and reading which model to use must
+not create nodes as a side effect."""
+def _find_llm_config() -> LlmConfig | None {
+    p = _find_pantry();
+    if p is None {
+        return None;
+    }
+    for c in [p --> [?:LlmConfig]] {
+        return c;
+    }
+    return None;
+}
+
+"""Write path, used only by SetLlmKey. Creates the Pantry if the graph is bare
+so a key can be saved before anything has been seeded."""
+def _get_llm_config() -> LlmConfig {
+    hit = _find_llm_config();
+    if hit is not None {
+        return hit;
+    }
+    return (_get_pantry() ++> LlmConfig())[0] as LlmConfig;
 }
 
 def _find_allergen(name: str) -> Allergen | None {

@@ -8,20 +8,29 @@ instead of with a hand-rolled f-string somewhere in a walker.
 The §4 shelf-life table is carried by `sem shelf_life_verdict` below. That
 annotation is the fix to Flaw 1 (v1 discarded past-date shelf-stable food).
 
-Model selection is explicit and env-driven - see `_select_model`:
-    GEMINI_API_KEY set   -> real Gemini through byLLM
-    GEMINI_API_KEY unset -> DemoLLM (a MockLLM) so the whole app still runs
+Model selection is explicit and re-resolved on every call - see `LlmRouter`:
+    key stored in the graph -> real Gemini, effective on the NEXT call
+    GEMINI_API_KEY in env   -> real Gemini
+    neither                 -> DemoLLM (a MockLLM) so the whole app still runs
 """
 
 import base64;
+import hashlib;
 import os;
+import re;
+import sys;
 import from byllm.lib { Image, MockLLM, Model, MTRuntime }
 import from byllm.llm { BaseLLM }
 import from byllm.types { CompletionResult }
+import from graph { _find_llm_config }
 
 # byllm 0.6.19 mis-annotates `Image.url` as a string literal instead of a union,
 # so a direct `Image(...)` can never pass `jac check`. Construct through here.
 glob _ImageCls: any = Image;
+
+# `sys.stderr` types as `TextIO | Any`, which has no `.write` the checker will
+# accept; the log line below is worth one `any` at the boundary.
+glob _stderr: any = sys.stderr;
 
 # ---------------------------------------------------------------------------
 # Constrained vocabularies
@@ -136,7 +145,7 @@ sem LabelRead.legibility_note =
     "One short sentence naming what could NOT be read and why, e.g. 'lot code cropped "
     "out of frame' or 'date smudged'. Empty string when the whole label read cleanly.";
 
-def extract_label(photo: Image, hint: str) -> LabelRead by llm(temperature=0.0);
+def extract_label(photo: Image, hint: str) -> LabelRead by router(temperature=0.0);
 sem extract_label =
     "Transcribe one donated food package from a photo taken at a food pantry intake "
     "desk. You are a transcriber, not an appraiser: report what is printed and what is "
@@ -200,7 +209,7 @@ def shelf_life_verdict(
     date_type: DateType,
     days_past_code: int,
     packaging_note: str
-) -> ShelfLifeCall by llm(temperature=0.0);
+) -> ShelfLifeCall by router(temperature=0.0);
 
 sem shelf_life_verdict =
     "Decide where one donated item goes at a food pantry intake desk.\n"
@@ -310,7 +319,7 @@ def explain_for_client(
     item: ItemForClient,
     constraints: list[str],
     language: str
-) -> str by llm(temperature=0.2);
+) -> str by router(temperature=0.2);
 
 sem explain_for_client =
     "Write a short note to a person picking up food at a pantry, telling them what this "
@@ -359,7 +368,7 @@ sem explain_for_client.language =
 # 4. resolve_constraints
 # ---------------------------------------------------------------------------
 
-def resolve_constraints(free_text: str) -> list[str] by llm(temperature=0.0);
+def resolve_constraints(free_text: str) -> list[str] by router(temperature=0.0);
 
 sem resolve_constraints =
     "Turn what a person said about their dietary needs into tag names that exist in the "
@@ -392,7 +401,21 @@ sem resolve_constraints.free_text =
     "be messy, abbreviated, or empty.";
 
 # ---------------------------------------------------------------------------
-# Model selection: real Gemini when the key is present, MockLLM when it is not
+# Model selection
+#
+# The four functions above are declared `by router(...)`, not `by llm(...)`.
+# That one word is what makes a key pasted into the running app work on the
+# NEXT call instead of on the next deploy: `router(...)` is evaluated at every
+# call site, so `LlmRouter.invoke` gets to look at the graph each time.
+#
+# Resolution order, highest first:
+#   1. the key stored on the LlmConfig node (set through POST /walker/SetLlmKey)
+#   2. GEMINI_API_KEY in the environment (.env locally, a service variable in
+#      the container - still supported, still works, just no longer the only way)
+#   3. no key at all -> DemoLLM, and the whole product still runs
+#
+# `glob llm` below still holds the ACTIVE concrete model, because the tests and
+# the demo seeder reach into it (`llm.queue`) to script the mock.
 # ---------------------------------------------------------------------------
 
 obj DemoLLM(MockLLM) {
@@ -470,27 +493,208 @@ def _demo_llm -> DemoLLM {
     );
 }
 
-"""THE SWITCH. Gemini when GEMINI_API_KEY is set, MockLLM when it is not.
+glob DEFAULT_MODEL_NAME: str = "gemini/gemini-2.0-flash";
+glob _demo_cache: DemoLLM | None = None;
 
-No key on the machine means the whole product still runs end to end today,
-which is the point - intake, verdicts, client explanations and the recall sweep
-all work against DemoLLM. Set GEMINI_API_KEY and nothing else in the codebase
-changes.
-"""
+"""One DemoLLM per process. Identity matters: tests and the demo seeder push
+scripted answers onto `llm.queue`, so clearing the key and landing back on the
+mock has to land on the SAME mock, not on a fresh one with an empty queue."""
+def _demo_singleton -> DemoLLM {
+    global _demo_cache;
+    if _demo_cache is None {
+        _demo_cache = _demo_llm();
+    }
+    return _demo_cache;
+}
+
+"""Env-only selection, used once at import before any graph exists."""
 def _select_model -> BaseLLM {
-    api_key = os.getenv("GEMINI_API_KEY", "");
-    if api_key {
+    api_key = os.getenv("GEMINI_API_KEY", "").strip();
+    if api_key != "" {
         return Model(
-            model_name=os.getenv("BACKSHELF_MODEL", "gemini/gemini-2.0-flash"),
+            model_name=os.getenv("BACKSHELF_MODEL", DEFAULT_MODEL_NAME),
             api_key=api_key
         );
     }
-    return _demo_llm();
+    return _demo_singleton();
 }
 
 glob llm: BaseLLM = _select_model();
 
-"""True when this process is running on the MockLLM fallback."""
+# ---------------------------------------------------------------------------
+# Secret handling. Nothing below ever returns `api_key` itself.
+# ---------------------------------------------------------------------------
+
+"""The only shape a stored key is ever allowed to leave this process in.
+
+`AIzaSyD...` becomes `AIza...D9xQ`: enough for a volunteer to confirm which key
+is loaded, not enough to use. A short string is masked entirely rather than
+half-revealed."""
+def _mask_key(key: str) -> str {
+    trimmed = key.strip();
+    if trimmed == "" {
+        return "";
+    }
+    if len(trimmed) < 12 {
+        return "*" * len(trimmed);
+    }
+    return trimmed[:4] + "..." + trimmed[-4:];
+}
+
+"""Scrub a provider error before it is shown or logged.
+
+litellm quotes the failing request back at you, and that request carries the
+key. This is the one place an error string from a provider crosses back into
+our own output, so it is redacted here rather than at each call site: the
+active key is replaced with its mask, and any Google-shaped key left over is
+replaced regardless of whether it is the one we sent."""
+def _redact(text: str) -> str {
+    out = str(text);
+    active = _desired_key().api_key;
+    if len(active) >= 8 {
+        out = out.replace(active, _mask_key(active));
+    }
+    out = re.sub(r"AIza[0-9A-Za-z_\-]{10,}", "AIza...[redacted]", out);
+    out = re.sub(r"(?i)(api[_-]?key\"?\s*[:=]\s*\"?)[^\s\",}]{8,}", r"\1[redacted]", out);
+    return out[:400];
+}
+
+# ---------------------------------------------------------------------------
+# Resolution, cached behind a fingerprint
+# ---------------------------------------------------------------------------
+
+obj KeyChoice {
+    has api_key: str,
+        model_name: str,
+        source: str;
+}
+
+"""Which key this process should be using RIGHT NOW. Graph beats env beats
+nothing. Reads the graph through the find-only helper, so asking the question
+never writes a node."""
+def _desired_key -> KeyChoice {
+    cfg = _find_llm_config();
+    if cfg is not None and cfg.api_key.strip() != "" {
+        named = cfg.model_name.strip();
+        return KeyChoice(
+            api_key=cfg.api_key.strip(),
+            model_name=(named if named != "" else DEFAULT_MODEL_NAME),
+            source="graph"
+        );
+    }
+    env_key = os.getenv("GEMINI_API_KEY", "").strip();
+    if env_key != "" {
+        return KeyChoice(
+            api_key=env_key,
+            model_name=os.getenv("BACKSHELF_MODEL", DEFAULT_MODEL_NAME),
+            source="env"
+        );
+    }
+    return KeyChoice(api_key="", model_name="", source="none");
+}
+
+glob _fingerprint: str = "";
+glob _active_source: str = "none";
+glob _last_llm_error: str = "";
+
+"""Hash, never the key itself - this value gets compared, held in a glob, and
+would otherwise be one careless print away from the logs."""
+def _fingerprint_of(choice: KeyChoice) -> str {
+    raw = choice.source + "|" + choice.model_name + "|" + choice.api_key;
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest();
+}
+
+"""Return the model to use for this call, rebuilding it only when the stored
+key or model id has actually changed. The fingerprint starts empty and no real
+fingerprint is ever empty, so the first call after boot always resolves."""
+def _resolve_llm -> BaseLLM {
+    global llm, _fingerprint, _active_source, _last_llm_error;
+    choice = _desired_key();
+    fp = _fingerprint_of(choice);
+    if fp == _fingerprint {
+        return llm;
+    }
+    _fingerprint = fp;
+    _active_source = choice.source;
+    # A different key is a different question. Carrying the old failure forward
+    # would leave the console showing a red auth error next to a green banner
+    # for a key that has never been tried.
+    _last_llm_error = "";
+    if choice.api_key != "" {
+        llm = Model(model_name=choice.model_name, api_key=choice.api_key);
+    } else {
+        llm = _demo_singleton();
+    }
+    return llm;
+}
+
+obj LlmRouter(BaseLLM) {
+    """The `by` target for all four functions in this file.
+
+    byLLM compiles `by router(temperature=0.0)` into a `router(...)` call plus
+    an `.invoke(...)` on whatever that returns, at every call. Holding the
+    router in the glob instead of a `Model` is therefore what makes the key
+    live: the decision moves from import time to call time for the cost of one
+    sha256 over a string that is already in memory.
+
+    It also owns the failure story. A wrong key raises inside litellm, and an
+    uncaught raise there means every walker on a public demo URL returns an
+    error the moment somebody pastes a typo. So a provider failure is caught,
+    redacted, logged once, and answered from the mock; `LlmStatus.last_error`
+    is where it surfaces. A blank key never gets here at all - it resolves to
+    the mock before any network call is attempted.
+    """
+    override def __call__(**kwargs: object) -> BaseLLM;
+    override def invoke(mt_run: MTRuntime) -> object;
+}
+
+impl LlmRouter.__call__(**kwargs: object) -> BaseLLM {
+    self.call_params = kwargs;
+    return self;
+}
+
+impl LlmRouter.invoke(mt_run: MTRuntime) -> object {
+    global _last_llm_error;
+    active = _resolve_llm();
+    active.call_params = self.call_params;
+    if isinstance(active, MockLLM) {
+        _last_llm_error = "";
+        return active.invoke(mt_run=mt_run);
+    }
+    try {
+        answer = active.invoke(mt_run=mt_run);
+        _last_llm_error = "";
+        return answer;
+    } except Exception as err {
+        _last_llm_error = _redact(type(err).__name__ + ": " + str(err));
+        _stderr.write(
+            "[backshelf] LLM call failed, answering from MockLLM instead: "
+            + _last_llm_error + "\n"
+        );
+        fallback = _demo_singleton();
+        fallback.call_params = self.call_params;
+        return fallback.invoke(mt_run=mt_run);
+    }
+}
+
+glob router: LlmRouter = LlmRouter(model_name="backshelf-router");
+
+"""True when the next byLLM call will be answered by the mock."""
 def _using_mock_llm -> bool {
-    return isinstance(llm, MockLLM);
+    return isinstance(_resolve_llm(), MockLLM);
+}
+
+"""Accessors, not `import from llm { _active_source }`: a `from` import binds
+the value once at import time and would freeze these at their boot values."""
+def _llm_source -> str {
+    _resolve_llm();
+    return _active_source;
+}
+
+def _llm_model_name -> str {
+    return _resolve_llm().model_name;
+}
+
+def _llm_last_error -> str {
+    return _last_llm_error;
 }

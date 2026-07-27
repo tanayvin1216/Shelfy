@@ -46,13 +46,19 @@ Proven both directions:
   the Gemini branch.
 - `.env` deleted → same call returned `using_mock_llm: true`, `verdict: review`.
 
-The switch is `_select_model` at `llm.sv.jac:480–491`. The model is chosen **once, at
-import** — restart the server after adding the key.
-
-> **This works locally only because `.venv` sits inside the repo.** In the Dockerfile
-> the venv is `/opt/venv` and the code is `/app`, so `load_dotenv()` never reaches
-> `/app/.env`; `.env` is also gitignored and dockerignored. On Railway set
-> `GEMINI_API_KEY` as a service variable and redeploy.
+> **Superseded — the key now goes in the running app.** The byLLM panel in the left
+> rail saves it onto an `LlmConfig` node, and it takes effect on the next call with no
+> restart. The env var above still works and is checked second. Resolution is
+> graph → env → mock, in `_resolve_llm` at `llm.sv.jac:536`, cached behind a sha256
+> fingerprint of the key. The router is `LlmRouter` at `llm.sv.jac:566`.
+>
+> This matters on Railway, where `.env` never worked: the Dockerfile puts the venv at
+> `/opt/venv` and the code at `/app`, so litellm's `load_dotenv()` walk-up never reaches
+> `/app/.env`, and `.env` is gitignored and dockerignored besides. Pasting the key into
+> the deployed app sidesteps that entirely.
+>
+> A bad key degrades to MockLLM instead of 500ing the walker; `LlmStatus.last_error`
+> is the only signal, so `using_mock_llm: false` can coexist with a mock answer.
 
 ## Verified environment facts
 

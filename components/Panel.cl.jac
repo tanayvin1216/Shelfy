@@ -239,15 +239,18 @@ def:pub Tag(text: str, tone: str = "neutral") -> JsxElement {
     >{text}</span>;
 }
 
+"""`kind` is the input's HTML type. It exists for one caller - the API key
+field, which must be `password` so the key is not readable over a volunteer's
+shoulder or in a screenshot of the console."""
 def:pub Field(label: str, value: str, onChange: Callable[[str], None],
-              placeholder: str = "") -> JsxElement {
+              placeholder: str = "", kind: str = "text") -> JsxElement {
     def handle(e: ChangeEvent) {
         onChange(e.target.value);
     }
     return <label style={{"display": "block", "marginBottom": "0.8rem"}}>
         <span style={_label(MUTED, "0.25rem")}>{label}</span>
         <input
-            type="text"
+            type={kind}
             value={value}
             onChange={handle}
             placeholder={placeholder}
@@ -264,6 +267,39 @@ def:pub Field(label: str, value: str, onChange: Callable[[str], None],
             }}
         />
     </label>;
+}
+
+"""A small button that sits in a row with a sibling.
+
+The `Action` buttons in the running order are full width and numbered because
+each one is a beat of the demo. Saving a key is not a beat, so this is the
+quieter treatment: same square corners and same mono small caps, outline unless
+it is the primary of the pair.
+"""
+def:pub SmallButton(label: str, onRun: Callable[[], None],
+                    primary: bool = False, busy: bool = False) -> JsxElement {
+    def handle(e: MouseEvent) {
+        onRun();
+    }
+    return <button
+        type="button"
+        onClick={handle}
+        disabled={busy}
+        style={{
+            "flex": "1 1 auto",
+            "padding": "0.45rem 0.3rem",
+            "border": "1px solid " + ("#d9d4c8" if busy else INK),
+            "borderRadius": "0",
+            "marginRight": "-1px",
+            "background": (INK if primary else "transparent") if not busy else "#e8e4da",
+            "color": (PAPER if primary else INK) if not busy else MUTED,
+            "fontFamily": MONO,
+            "fontSize": "0.64rem",
+            "letterSpacing": "0.12em",
+            "textTransform": "uppercase",
+            "cursor": "wait" if busy else "pointer"
+        }}
+    >{label}</button>;
 }
 
 """One segment of a `Choice`. Its own component so the option string is closed

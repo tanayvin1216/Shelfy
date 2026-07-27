@@ -15,6 +15,8 @@ The API surface, in the order the demo uses it:
     POST /walker/ClearItem     intake.sv.jac       the human clearance gate
     POST /walker/MatchNeeds    client_search.sv.jac client-side shelf search
     POST /walker/RecallSweep   sweep.sv.jac        the retroactive sweep
+    POST /walker/LlmStatus     settings.sv.jac     Gemini or MockLLM, and why
+    POST /walker/SetLlmKey     settings.sv.jac     paste a key, blank clears it
 
 Everything else in those modules is underscore-prefixed and stays private.
 
@@ -26,7 +28,7 @@ wire instead of arriving as untyped dicts.
 
 import from graph {
     SeedPantry, SeedReport,
-    Pantry, Shelf, Item, Allergen, Household, RecallFeed, RecallRecord,
+    Pantry, Shelf, Item, Allergen, Household, RecallFeed, RecallRecord, LlmConfig,
     ItemView, AllergenTagView, RecallFlagView
 }
 import from demo { SeedDemo, DemoReport, DemoHandout }
@@ -36,6 +38,7 @@ import from intake {
 }
 import from client_search { MatchNeeds, MatchReport, ShelfMatch, WithheldItem }
 import from sweep { RecallSweep, SweepReport, FlaggedItem, NotifyHousehold, SweepHop }
+import from settings { LlmStatus, SetLlmKey, LlmStatusView, SetKeyView }
 
 cl {
     import from .frontend { app as BackshelfApp }
